@@ -1,5 +1,6 @@
 
 import io
+import re
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -11,10 +12,9 @@ st.set_page_config(
 )
 
 st.title("Educational Quality Analytics")
-st.caption("نسخة أولية لتحليل ملفات الاستبانات التعليمية")
+st.caption("نسخة تجريبية لتحليل الاستبانات التعليمية")
 
 def clean_numeric_series(series: pd.Series) -> pd.Series:
-    """تحويل القيم الرقمية النصية إلى أرقام مع الإبقاء على القيم غير الصالحة كـ NaN."""
     if pd.api.types.is_numeric_dtype(series):
         return pd.to_numeric(series, errors="coerce")
 
@@ -27,10 +27,6 @@ def clean_numeric_series(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 def cronbach_alpha(df: pd.DataFrame) -> float:
-    """
-    حساب Cronbach's Alpha.
-    يجب أن يحتوي df على عمودين رقميين على الأقل وصفين مكتملين على الأقل.
-    """
     data = df.dropna(axis=0, how="any").astype(float)
 
     if data.shape[1] < 2:
@@ -61,6 +57,34 @@ def classify_alpha(alpha: float) -> str:
     if alpha >= 0.60:
         return "حدّي"
     return "ضعيف"
+
+def looks_like_identifier(column_name: str, series: pd.Series) -> bool:
+    name = str(column_name).strip().lower()
+
+    identifier_tokens = [
+        "id", "participant_id", "student_id", "respondent_id",
+        "رقم", "معرف", "الرقم الجامعي", "رقم الطالب", "رقم المشارك"
+    ]
+
+    name_suspicious = (
+        any(token in name for token in identifier_tokens)
+        or bool(re.search(r"(^|[_\s-])id($|[_\s-])", name))
+    )
+
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return name_suspicious
+
+    unique_ratio = numeric.nunique() / len(numeric)
+    sequential = False
+
+    if len(numeric) >= 3:
+        sorted_values = np.sort(numeric.unique())
+        if len(sorted_values) == len(numeric):
+            diffs = np.diff(sorted_values)
+            sequential = np.allclose(diffs, 1)
+
+    return name_suspicious or unique_ratio >= 0.95 or sequential
 
 uploaded_file = st.file_uploader(
     "ارفع ملف Excel",
@@ -109,7 +133,6 @@ if all_missing_columns:
     raw_df = raw_df.drop(columns=all_missing_columns)
 
 converted_df = raw_df.copy()
-conversion_report = []
 
 for column in converted_df.columns:
     original_non_missing = converted_df[column].notna().sum()
@@ -117,10 +140,8 @@ for column in converted_df.columns:
     numeric_non_missing = numeric_series.notna().sum()
 
     ratio = numeric_non_missing / original_non_missing if original_non_missing else 0
-
     if ratio >= 0.70:
         converted_df[column] = numeric_series
-        conversion_report.append((column, ratio))
 
 numeric_columns = converted_df.select_dtypes(include=np.number).columns.tolist()
 
@@ -131,17 +152,30 @@ if not numeric_columns:
     )
     st.stop()
 
-default_columns = numeric_columns[: min(10, len(numeric_columns))]
-
+# نبقي جميع الأعمدة الرقمية محددة افتراضيًا حتى يرى المستخدم أثر الاختيار،
+# لكن نظهر تحذيرًا واضحًا عن الأعمدة المحتمل أنها معرفات.
 selected_columns = st.multiselect(
     "اختر أعمدة أسئلة الاستبانة",
     options=numeric_columns,
-    default=default_columns
+    default=numeric_columns,
+    help="أزل أي عمود لا يمثل سؤالًا، مثل رقم المشارك أو الرقم الجامعي."
 )
 
 if not selected_columns:
     st.warning("اختر عمودًا واحدًا على الأقل.")
     st.stop()
+
+suspicious_columns = [
+    col for col in selected_columns
+    if looks_like_identifier(col, converted_df[col])
+]
+
+if suspicious_columns:
+    st.warning(
+        "تنبيه: الأعمدة التالية تبدو كمعرّفات أو أرقام تسلسلية وليست أسئلة استبانة: "
+        + "، ".join(suspicious_columns)
+        + ". إذا كانت ليست أسئلة، أزلها من الاختيار أعلاه وستتحدث النتائج مباشرة."
+    )
 
 analysis_df = converted_df[selected_columns].copy()
 
@@ -157,6 +191,7 @@ for col in selected_columns:
         "أقل قيمة": analysis_df[col].min(),
         "أعلى قيمة": analysis_df[col].max(),
         "عدد القيم الفريدة": int(analysis_df[col].nunique(dropna=True)),
+        "يبدو كمعرّف": "نعم" if col in suspicious_columns else "لا",
     })
 
 quality_df = pd.DataFrame(quality_rows)
@@ -221,6 +256,12 @@ else:
             int(analysis_df.dropna(axis=0, how="any").shape[0])
         )
 
+        if suspicious_columns:
+            st.info(
+                "القيمة الحالية تشمل جميع الأعمدة المختارة. "
+                "أزل العمود المعرّف من قائمة الاختيار لمشاهدة القيمة المصححة فورًا."
+            )
+
         if alpha_value < 0 or alpha_value > 1:
             st.warning(
                 "قيمة Alpha خارج النطاق المعتاد من 0 إلى 1. "
@@ -251,7 +292,8 @@ st.subheader("تنزيل النتائج")
 
 summary_df = pd.DataFrame([{
     "عدد السجلات": len(raw_df),
-    "عدد الأسئلة المختارة": len(selected_columns),
+    "عدد الأعمدة المختارة": len(selected_columns),
+    "الأعمدة المشبوهة": ", ".join(suspicious_columns),
     "Cronbach Alpha": alpha_value,
     "تصنيف Alpha": alpha_status,
     "النطاق المتوقع": f"{expected_min} - {expected_max}",

@@ -76,6 +76,24 @@ st.markdown(
     [data-testid="stFileUploaderDropzone"] {background:var(--soft); border-radius:14px; min-height:135px;}
     [data-testid="stMetric"] {background:white; border:1px solid var(--line); border-radius:16px; padding:1rem; box-shadow:0 5px 18px rgba(22,48,45,.04);}
     [data-testid="stMetricValue"] {color:var(--primary-dark); font-weight:800;}
+    [data-testid="stMetricLabel"] {
+        color: #526965 !important;
+        font-size: .92rem !important;
+        font-weight: 700 !important;
+        opacity: 1 !important;
+        justify-content: center !important;
+        text-align: center !important;
+        margin-bottom: .35rem;
+    }
+    [data-testid="stMetricLabel"] p,
+    [data-testid="stMetricLabel"] div {
+        color: #526965 !important;
+        opacity: 1 !important;
+    }
+    [data-testid="stMetricValue"] > div {
+        justify-content: center !important;
+        text-align: center !important;
+    }
     [data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:14px; overflow:hidden;}
     [data-testid="stExpander"] {background:white; border:1px solid var(--line); border-radius:15px;}
     .stButton > button, .stDownloadButton > button {

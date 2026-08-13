@@ -3,7 +3,6 @@ import json
 import re
 import csv
 import zipfile
-import hmac
 import hashlib
 from pathlib import Path
 
@@ -262,6 +261,27 @@ LIKERT_TOKENS = [
     "ممتاز", "جيد جدا", "جيد جدًا", "جيد", "مقبول", "ضعيف",
 ]
 
+# تحويلات صريحة فقط لتجنب تفسير نصوص حرة على أنها إجابات رقمية.
+LIKERT_SCORE_MAP = {
+    # الموافقة
+    "غير موافق بشده": 1, "strongly disagree": 1,
+    "غير موافق": 2, "disagree": 2,
+    "محايد": 3, "neutral": 3, "neither agree nor disagree": 3,
+    "موافق": 4, "agree": 4,
+    "موافق بشده": 5, "strongly agree": 5,
+    # الرضا
+    "غير راض جدا": 1, "غير راضي جدا": 1, "very dissatisfied": 1,
+    "غير راض": 2, "غير راضي": 2, "dissatisfied": 2,
+    "راض": 4, "راضي": 4, "satisfied": 4,
+    "راض جدا": 5, "راضي جدا": 5, "very satisfied": 5,
+    # الجودة
+    "ضعيف": 1, "poor": 1,
+    "مقبول": 2, "fair": 2,
+    "جيد": 3, "good": 3,
+    "جيد جدا": 4, "very good": 4,
+    "ممتاز": 5, "excellent": 5,
+}
+
 AGGREGATE_TOKENS = [
     "mean", "average", "avg", "median", "std", "stdev", "sd",
     "variance", "percentage", "percent", "%", "count", "frequency",
@@ -299,43 +319,36 @@ def normalize_text(value) -> str:
     return text
 
 
+def normalize_likert_label(value) -> str:
+    """توحيد الكتابة العربية والإنجليزية قبل مطابقة فئات Likert."""
+    text = normalize_text(value)
+    text = re.sub(r"[\u064B-\u065F\u0670\u06D6-\u06ED]", "", text)
+    text = text.replace("ـ", "").replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    text = text.replace("ى", "ي").replace("ة", "ه")
+    text = re.sub(r"[^\w\u0600-\u06FF\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def likert_score_from_label(value):
+    if pd.isna(value):
+        return np.nan
+    return LIKERT_SCORE_MAP.get(normalize_likert_label(value), np.nan)
+
+
+def render_footer():
+    st.markdown(
+        '<div class="footer">منصة تحليلات الجودة التعليمية · تحليل البيانات لاتخاذ قرارات قابلة للقياس'
+        '<br><strong>تطوير المهندس أحمد المالكي</strong></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def user_safe_error(context: str):
     """رسالة عامة لا تكشف مسارات الخادم أو تفاصيل المكتبات."""
     st.error(
         f"تعذر {context}. تحقق من سلامة الملف وبنيته ثم أعد المحاولة. "
         "إذا استمرت المشكلة فاستخدم ملفًا أصغر أو حوّله إلى CSV/XLSX منظم."
     )
-
-
-def require_optional_access_code():
-    """
-    بوابة بسيطة للنسخة التجريبية عند ضبط APP_PASSWORD في Streamlit Secrets.
-    ليست بديلًا عن نظام هوية وصلاحيات للنسخة التجارية.
-    """
-    try:
-        configured_password = st.secrets.get("APP_PASSWORD")
-    except Exception:
-        configured_password = None
-
-    if not configured_password:
-        st.warning(
-            "وضع تجريبي عام: لم يتم تفعيل رمز دخول. استخدم بيانات اصطناعية أو منزوعة الهوية فقط.",
-            icon="⚠️",
-        )
-        return
-
-    if st.session_state.get("access_granted"):
-        return
-
-    st.subheader("الدخول إلى النسخة التجريبية")
-    entered = st.text_input("رمز الدخول", type="password")
-    if st.button("دخول", type="primary", use_container_width=True):
-        if hmac.compare_digest(str(entered), str(configured_password)):
-            st.session_state["access_granted"] = True
-            st.rerun()
-        else:
-            st.error("رمز الدخول غير صحيح.")
-    st.stop()
 
 
 def validate_zip_container(raw_bytes: bytes, extension: str):
@@ -362,6 +375,7 @@ def validate_zip_container(raw_bytes: bytes, extension: str):
             required_paths = {
                 "xlsx": "xl/workbook.xml",
                 "docx": "word/document.xml",
+                "ods": "content.xml",
             }
             required = required_paths.get(extension)
             if required and required not in names:
@@ -505,6 +519,13 @@ def equal_weight_item_mean(descriptive_df: pd.DataFrame) -> float:
         return np.nan
     item_means = pd.to_numeric(descriptive_df["المتوسط"], errors="coerce").dropna()
     return float(item_means.mean()) if not item_means.empty else np.nan
+
+
+def remove_empty_question_columns(df: pd.DataFrame, columns):
+    """إزالة البنود التي لا تحتوي أي قيمة صالحة مع إرجاع قائمة واضحة بها."""
+    empty_columns = [column for column in columns if df[column].notna().sum() == 0]
+    valid_columns = [column for column in columns if column not in empty_columns]
+    return df[valid_columns].copy(), valid_columns, empty_columns
 
 
 def clean_header_text(value) -> str:
@@ -717,8 +738,55 @@ def convert_numeric_candidates(df: pd.DataFrame, threshold: float = 0.70) -> pd.
 
         if ratio >= threshold:
             converted[column] = numeric_series
+            continue
+
+        # إذا لم يكن العمود رقميًا، نحاول تحويل فئات Likert المعروفة فقط.
+        likert_series = converted[column].map(likert_score_from_label)
+        likert_non_missing = likert_series.notna().sum()
+        likert_ratio = likert_non_missing / original_non_missing
+        if likert_ratio >= threshold and likert_series.nunique(dropna=True) >= 2:
+            converted[column] = likert_series.astype(float)
 
     return converted
+
+
+def build_weighted_frequency_analysis(df: pd.DataFrame, likert_columns, question_column=None):
+    """حساب المتوسط والرضا من جدول تكرارات فئات Likert ذات مقياس 1–5."""
+    scored_columns = {
+        column: likert_score_from_label(column)
+        for column in likert_columns
+    }
+    scored_columns = {
+        column: float(score)
+        for column, score in scored_columns.items()
+        if not pd.isna(score)
+    }
+    if len(scored_columns) < 2:
+        return pd.DataFrame()
+
+    counts = df[list(scored_columns)].apply(pd.to_numeric, errors="coerce")
+    counts = counts.mask(counts < 0)
+    totals = counts.sum(axis=1, min_count=1)
+    weighted_sum = sum(
+        counts[column].fillna(0) * score
+        for column, score in scored_columns.items()
+    )
+    weighted_mean = weighted_sum / totals.replace(0, np.nan)
+
+    if question_column and question_column in df.columns:
+        questions = df[question_column].astype(str)
+    else:
+        questions = pd.Series(
+            [f"البند {index}" for index in range(1, len(df) + 1)],
+            index=df.index,
+        )
+
+    return pd.DataFrame({
+        "السؤال": questions,
+        "إجمالي الاستجابات": totals,
+        "المتوسط المرجح": weighted_mean,
+        "مؤشر الرضا %": ((weighted_mean - 1) / 4 * 100).clip(0, 100),
+    }).round({"إجمالي الاستجابات": 0, "المتوسط المرجح": 4, "مؤشر الرضا %": 2})
 
 
 # ============================================================
@@ -813,7 +881,8 @@ def read_json_file(uploaded_file):
 def read_xml_file(uploaded_file):
     uploaded_file.seek(0)
     raw = uploaded_file.read()
-    lowered = raw.lower()
+    # إزالة null bytes تمنع تجاوز الفحص باستخدام UTF-16 قبل تمرير XML إلى lxml.
+    lowered = raw.lower().replace(b"\x00", b"")
     if b"<!doctype" in lowered or b"<!entity" in lowered:
         raise ValueError("ملفات XML التي تحتوي DOCTYPE أو ENTITY غير مسموحة.")
     df = pd.read_xml(io.BytesIO(raw))
@@ -1397,11 +1466,87 @@ def donut_metric(label: str, value: float, color: str = "#136f63", note: str = "
     )
 
 
+def render_question_bar_chart(
+    frame: pd.DataFrame,
+    question_column: str = "السؤال",
+    value_column: str = "مؤشر الرضا %",
+    color: str = "#72b493",
+    height: int = 540,
+):
+    """رسم أعمدة يضع أسماء البنود أسفل خط المحور بمساحة مستقلة وواضحة."""
+    chart_frame = frame[[question_column, value_column]].dropna().copy()
+    if chart_frame.empty:
+        return
+
+    st.vega_lite_chart(
+        chart_frame,
+        {
+            "height": height,
+            "padding": {"top": 12, "right": 20, "bottom": 145, "left": 24},
+            "autosize": {"type": "fit", "contains": "padding", "resize": True},
+            "mark": {
+                "type": "bar",
+                "color": color,
+                "cornerRadiusTopLeft": 6,
+                "cornerRadiusTopRight": 6,
+            },
+            "encoding": {
+                "x": {
+                    "field": question_column,
+                    "type": "nominal",
+                    "sort": "-y",
+                    "axis": {
+                        "title": None,
+                        "labelAngle": -42,
+                        "labelAlign": "right",
+                        "labelBaseline": "top",
+                        "labelColor": "#6f5418",
+                        "labelFontSize": 13,
+                        "labelFontWeight": 700,
+                        "labelLimit": 360,
+                        "labelPadding": 22,
+                        "labelOverlap": False,
+                        "labelBound": False,
+                        "tickSize": 6,
+                        "tickColor": "#cfded5",
+                        "domainColor": "#b9cec1",
+                    },
+                },
+                "y": {
+                    "field": value_column,
+                    "type": "quantitative",
+                    "scale": {"domain": [0, 100]},
+                    "axis": {
+                        "title": "مؤشر الرضا %",
+                        "titleColor": "#235c48",
+                        "labelColor": "#5d746b",
+                        "gridColor": "#e7f0ea",
+                        "domain": False,
+                    },
+                },
+                "tooltip": [
+                    {"field": question_column, "type": "nominal", "title": "السؤال"},
+                    {
+                        "field": value_column,
+                        "type": "quantitative",
+                        "title": "مؤشر الرضا",
+                        "format": ".1f",
+                    },
+                ],
+            },
+            "config": {
+                "view": {"stroke": None, "clip": False},
+                "axis": {"labelFont": "Segoe UI", "titleFont": "Segoe UI"},
+            },
+        },
+        use_container_width=True,
+        theme=None,
+    )
+
+
 # ============================================================
 # واجهة رفع الملف
 # ============================================================
-require_optional_access_code()
-
 st.markdown(
     """
     <div class="feature-grid">
@@ -1411,6 +1556,11 @@ st.markdown(
     </div>
     """,
     unsafe_allow_html=True,
+)
+
+st.warning(
+    "المنصة في مرحلة الاختبار دون تسجيل دخول. استخدم بيانات اصطناعية أو منزوعة الهوية فقط.",
+    icon="⚠️",
 )
 
 uploaded_file = st.file_uploader(
@@ -1429,6 +1579,7 @@ if not uploaded_file:
         unsafe_allow_html=True,
     )
     st.info("بانتظار ملف البيانات للبدء في التحليل.", icon="📂")
+    render_footer()
     st.stop()
 
 uploaded_digest = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
@@ -1453,6 +1604,7 @@ if st.session_state.get("analysis_started_for") != file_key:
         "لم تبدأ المعالجة بعد. يمكنك التأكد من اسم الملف ثم الضغط على زر البدء.",
         icon="ℹ️",
     )
+    render_footer()
     st.stop()
 
 
@@ -1465,13 +1617,16 @@ try:
         candidates, reader_note = loaded_result
 except UserInputError as exc:
     st.error(str(exc))
+    render_footer()
     st.stop()
 except Exception:
     user_safe_error("قراءة الملف")
+    render_footer()
     st.stop()
 
 if not candidates:
     st.error("لم يتم العثور على بيانات قابلة للتحليل داخل الملف.")
+    render_footer()
     st.stop()
 
 st.success(f"تمت قراءة الملف بنجاح: {uploaded_file.name}", icon="✅")
@@ -1510,6 +1665,7 @@ st.info(
 
 if raw_df.empty:
     st.error("الجزء المحدد لا يحتوي على بيانات.")
+    render_footer()
     st.stop()
 
 header_aliases = build_header_aliases(raw_df.columns)
@@ -1623,6 +1779,7 @@ if dataset_type == "text":
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+    render_footer()
     st.stop()
 
 
@@ -1638,12 +1795,61 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
 
     numeric_columns = converted_df.select_dtypes(include=np.number).columns.tolist()
 
+    weighted_frequency_df = pd.DataFrame()
+    weighted_frequency_overall = np.nan
     if dataset_type == "frequency_distribution":
         likert_columns = [c for c in converted_df.columns if is_likert_column_name(c)]
+        descriptor_candidates = [
+            column for column in converted_df.columns
+            if column not in likert_columns
+            and not pd.api.types.is_numeric_dtype(converted_df[column])
+        ]
+        question_column = descriptor_candidates[0] if descriptor_candidates else None
+
         if likert_columns:
             st.info(
                 "اكتشفت المنصة أعمدة فئات استجابة Likert: "
                 + "، ".join(header_aliases.get(col, col) for col in likert_columns)
+            )
+            weighted_frequency_df = build_weighted_frequency_analysis(
+                converted_df,
+                likert_columns,
+                question_column,
+            )
+
+        if not weighted_frequency_df.empty:
+            valid_weighted = weighted_frequency_df.dropna(
+                subset=["إجمالي الاستجابات", "المتوسط المرجح"]
+            )
+            total_responses = valid_weighted["إجمالي الاستجابات"].sum()
+            if total_responses > 0:
+                weighted_frequency_overall = float(
+                    (
+                        valid_weighted["المتوسط المرجح"]
+                        * valid_weighted["إجمالي الاستجابات"]
+                    ).sum()
+                    / total_responses
+                )
+
+            st.subheader("التحليل المرجح للتوزيع التكراري")
+            wf1, wf2, wf3 = st.columns(3)
+            wf1.metric("عدد البنود", f"{weighted_frequency_df['السؤال'].nunique():,}")
+            wf2.metric("إجمالي الاستجابات", f"{int(total_responses):,}")
+            wf3.metric(
+                "الرضا العام المرجح",
+                f"{((weighted_frequency_overall - 1) / 4 * 100):.1f}%"
+                if not pd.isna(weighted_frequency_overall) else "غير متاح",
+            )
+            st.dataframe(weighted_frequency_df, use_container_width=True, hide_index=True)
+            render_question_bar_chart(
+                weighted_frequency_df
+                .sort_values("مؤشر الرضا %", ascending=False)
+                .head(20),
+                color="#72b493",
+            )
+        elif likert_columns:
+            st.warning(
+                "تعذر حساب المتوسط المرجح. تحقق من أن أعمدة فئات الإجابة تحتوي تكرارات رقمية غير سالبة."
             )
 
     st.info(
@@ -1669,6 +1875,11 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
         "عدد السجلات": len(converted_df),
         "عدد الأعمدة": len(converted_df.columns),
         "Cronbach Alpha": "غير محسوب - البيانات مجمعة",
+        "المتوسط المرجح العام": weighted_frequency_overall,
+        "مؤشر الرضا العام المرجح %": (
+            (weighted_frequency_overall - 1) / 4 * 100
+            if not pd.isna(weighted_frequency_overall) else np.nan
+        ),
     }])
 
     output = io.BytesIO()
@@ -1677,6 +1888,8 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
         safe_to_excel(aggregate_display_df, writer, "Extracted Data")
         if not aggregate_summary.empty:
             safe_to_excel(aggregate_summary, writer, "Numeric Summary")
+        if not weighted_frequency_df.empty:
+            safe_to_excel(weighted_frequency_df, writer, "Weighted Analysis")
         safe_to_excel(header_mapping_df, writer, "Column Mapping")
 
     output.seek(0)
@@ -1685,6 +1898,7 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
         "الملخص": summary_df,
         "البيانات المستخرجة": aggregate_display_df,
         "الملخص الرقمي": aggregate_summary,
+        "التحليل المرجح": weighted_frequency_df,
         "خريطة الأعمدة": header_mapping_df,
     })
 
@@ -1696,6 +1910,7 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
     )
 
     st.success("اكتملت معالجة البيانات المجمعة.")
+    render_footer()
     st.stop()
 
 
@@ -1703,6 +1918,23 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
 # الاستجابات الفردية
 # ============================================================
 converted_df, auto_question_columns, auto_identifier_columns = detect_question_columns(raw_df)
+
+text_likert_converted_columns = [
+    column for column in converted_df.columns
+    if not pd.api.types.is_numeric_dtype(raw_df[column])
+    and pd.api.types.is_numeric_dtype(converted_df[column])
+    and converted_df[column].map(lambda value: pd.isna(value) or 1 <= value <= 5).all()
+]
+if text_likert_converted_columns:
+    st.info(
+        "حوّلت المنصة فئات Likert النصية إلى مقياس 1–5 في الأعمدة التالية: "
+        + "، ".join(
+            header_aliases.get(column, column)
+            for column in text_likert_converted_columns
+        )
+        + ". راجع المعاينة قبل اعتماد النتائج.",
+        icon="🔤",
+    )
 
 if auto_identifier_columns:
     st.info(
@@ -1716,8 +1948,9 @@ numeric_columns = converted_df.select_dtypes(include=np.number).columns.tolist()
 if not numeric_columns:
     st.error(
         "لم يتم العثور على أعمدة رقمية مناسبة. "
-        "تأكد من أن استجابات المشاركين موجودة كقيم رقمية."
+        "تأكد من أن الاستجابات رقمية أو تستخدم فئات Likert معروفة مثل موافق/محايد/غير موافق."
     )
+    render_footer()
     st.stop()
 
 st.subheader("تحديد أسئلة الاستبانة")
@@ -1747,6 +1980,7 @@ selected_columns = st.multiselect(
 
 if not selected_columns:
     st.warning("اختر عمودًا واحدًا على الأقل.")
+    render_footer()
     st.stop()
 
 suspicious_columns = [
@@ -1769,6 +2003,7 @@ if valid_value_count == 0:
         "الأعمدة المختارة لا تحتوي قيمًا رقمية صالحة للتحليل. "
         "غيّر الأعمدة أو راجع تنسيق القيم في الملف."
     )
+    render_footer()
     st.stop()
 
 st.progress(75, text="المرحلة 3 من 4 — تم اعتماد الأعمدة الجاهزة للتحليل")
@@ -1828,6 +2063,7 @@ st.info(
 
 if expected_min >= expected_max:
     st.error("يجب أن تكون أعلى قيمة أكبر من أقل قيمة.")
+    render_footer()
     st.stop()
 
 out_of_range = {}
@@ -1861,6 +2097,7 @@ if out_of_range:
     )
     if range_policy.startswith("إيقاف"):
         st.error("تم إيقاف التحليل حتى تُصحّح القيم خارج المقياس في الملف.")
+        render_footer()
         st.stop()
 
     analysis_df, excluded_by_column = exclude_out_of_range_values(
@@ -1878,8 +2115,25 @@ if out_of_range:
 else:
     excluded_out_of_range = 0
 
-if int(analysis_df.notna().sum().sum()) == 0:
+analysis_df, selected_columns, empty_after_cleaning = remove_empty_question_columns(
+    analysis_df,
+    selected_columns,
+)
+if empty_after_cleaning:
+    st.warning(
+        "استبعدت المنصة البنود التالية بالكامل من عدد الأسئلة ومن جميع الحسابات؛ "
+        "لأنها لا تحتوي أي استجابة صالحة داخل المقياس: "
+        + "، ".join(header_aliases.get(column, column) for column in empty_after_cleaning),
+        icon="🚫",
+    )
+    suspicious_columns = [
+        column for column in suspicious_columns
+        if column in selected_columns
+    ]
+
+if not selected_columns or int(analysis_df.notna().sum().sum()) == 0:
     st.error("لا توجد قيم صالحة داخل نطاق المقياس المختار.")
+    render_footer()
     st.stop()
 
 # التقرير والحسابات اللاحقة يستخدمان النسخة المنظفة فقط.
@@ -1917,15 +2171,6 @@ if scale_span > 0:
     ).clip(0, 100).round(2)
 
     st.dataframe(satisfaction_df, use_container_width=True)
-
-    chart_df = (
-        satisfaction_df
-        .set_index("السؤال")[["مؤشر الرضا %"]]
-        .sort_values("مؤشر الرضا %", ascending=False)
-        .head(20)
-    )
-    st.caption("مقارنة مؤشر الرضا بين البنود — أعلى 20 بندًا")
-    st.bar_chart(chart_df, color="#136f63", horizontal=False)
 else:
     satisfaction_df = pd.DataFrame()
 
@@ -2060,64 +2305,9 @@ with st.container(border=True):
                 "تظهر أسماء الأسئلة بزاوية قطرية أسفل الأعمدة وباللون الذهبي الداكن، "
                 "بينما تمثل الأعمدة الخضراء مؤشر الرضا."
             )
-            st.vega_lite_chart(
+            render_question_bar_chart(
                 visual_satisfaction,
-                {
-                    "height": 470,
-                    "mark": {
-                        "type": "bar",
-                        "color": "#72b493",
-                        "cornerRadiusTopLeft": 6,
-                        "cornerRadiusTopRight": 6,
-                    },
-                    "encoding": {
-                        "x": {
-                            "field": "السؤال",
-                            "type": "nominal",
-                            "sort": "-y",
-                            "axis": {
-                                "title": None,
-                                "labelAngle": -42,
-                                "labelAlign": "right",
-                                "labelBaseline": "middle",
-                                "labelColor": "#8a691f",
-                                "labelFontSize": 12,
-                                "labelFontWeight": 700,
-                                "labelLimit": 320,
-                                "labelPadding": 10,
-                                "tickColor": "#d8e8de",
-                                "domainColor": "#d8e8de",
-                            },
-                        },
-                        "y": {
-                            "field": "مؤشر الرضا %",
-                            "type": "quantitative",
-                            "scale": {"domain": [0, 100]},
-                            "axis": {
-                                "title": "مؤشر الرضا %",
-                                "titleColor": "#235c48",
-                                "labelColor": "#5d746b",
-                                "gridColor": "#e7f0ea",
-                                "domain": False,
-                            },
-                        },
-                        "tooltip": [
-                            {"field": "السؤال", "type": "nominal", "title": "السؤال"},
-                            {
-                                "field": "مؤشر الرضا %",
-                                "type": "quantitative",
-                                "title": "مؤشر الرضا",
-                                "format": ".1f",
-                            },
-                        ],
-                    },
-                    "config": {
-                        "view": {"stroke": None},
-                        "axis": {"labelFont": "Segoe UI", "titleFont": "Segoe UI"},
-                    },
-                },
-                use_container_width=True,
-                theme=None,
+                color="#72b493",
             )
         else:
             st.info("لا تتوفر بيانات كافية لرسم مؤشرات البنود.")
@@ -2249,7 +2439,4 @@ st.download_button(
 )
 
 st.success("اكتمل التحليل وأصبح التقرير جاهزًا للتنزيل.", icon="✅")
-st.markdown(
-    '<div class="footer">منصة تحليلات الجودة التعليمية · تحليل البيانات لاتخاذ قرارات قابلة للقياس<br><strong>تطوير المهندس أحمد المالكي</strong></div>',
-    unsafe_allow_html=True,
-)
+render_footer()

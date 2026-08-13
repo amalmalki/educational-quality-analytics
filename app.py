@@ -2053,40 +2053,71 @@ with st.container(border=True):
             visual_satisfaction = (
                 satisfaction_df
                 .nlargest(20, "مؤشر الرضا %")
-                .sort_values("مؤشر الرضا %", ascending=True)
+                .sort_values("مؤشر الرضا %", ascending=False)
                 .reset_index(drop=True)
             )
-            visual_satisfaction.insert(
-                0,
-                "رمز البند",
-                [f"س{index:02d}" for index in range(1, len(visual_satisfaction) + 1)],
-            )
-            visual_chart_df = visual_satisfaction.set_index("رمز البند")[["مؤشر الرضا %"]]
-            chart_height = max(360, min(760, 42 * len(visual_satisfaction)))
             st.caption(
-                "استخدمت رموزًا مختصرة داخل الرسم حتى لا تتداخل عناوين الأسئلة الطويلة مع الأعمدة. "
-                "تظهر مطابقة كل رمز مع اسم السؤال كاملًا أسفل الرسم."
+                "تظهر أسماء الأسئلة بزاوية قطرية أسفل الأعمدة وباللون الذهبي الداكن، "
+                "بينما تمثل الأعمدة الخضراء مؤشر الرضا."
             )
-            st.bar_chart(
-                visual_chart_df,
-                color="#72b493",
-                horizontal=True,
-                height=chart_height,
-            )
-            st.dataframe(
-                visual_satisfaction[["رمز البند", "السؤال", "مؤشر الرضا %"]]
-                .sort_values("مؤشر الرضا %", ascending=False),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "رمز البند": st.column_config.TextColumn("الرمز", width="small"),
-                    "السؤال": st.column_config.TextColumn("اسم السؤال الكامل", width="large"),
-                    "مؤشر الرضا %": st.column_config.NumberColumn(
-                        "مؤشر الرضا",
-                        format="%.1f%%",
-                        width="medium",
-                    ),
+            st.vega_lite_chart(
+                visual_satisfaction,
+                {
+                    "height": 470,
+                    "mark": {
+                        "type": "bar",
+                        "color": "#72b493",
+                        "cornerRadiusTopLeft": 6,
+                        "cornerRadiusTopRight": 6,
+                    },
+                    "encoding": {
+                        "x": {
+                            "field": "السؤال",
+                            "type": "nominal",
+                            "sort": "-y",
+                            "axis": {
+                                "title": None,
+                                "labelAngle": -42,
+                                "labelAlign": "right",
+                                "labelBaseline": "middle",
+                                "labelColor": "#8a691f",
+                                "labelFontSize": 12,
+                                "labelFontWeight": 700,
+                                "labelLimit": 320,
+                                "labelPadding": 10,
+                                "tickColor": "#d8e8de",
+                                "domainColor": "#d8e8de",
+                            },
+                        },
+                        "y": {
+                            "field": "مؤشر الرضا %",
+                            "type": "quantitative",
+                            "scale": {"domain": [0, 100]},
+                            "axis": {
+                                "title": "مؤشر الرضا %",
+                                "titleColor": "#235c48",
+                                "labelColor": "#5d746b",
+                                "gridColor": "#e7f0ea",
+                                "domain": False,
+                            },
+                        },
+                        "tooltip": [
+                            {"field": "السؤال", "type": "nominal", "title": "السؤال"},
+                            {
+                                "field": "مؤشر الرضا %",
+                                "type": "quantitative",
+                                "title": "مؤشر الرضا",
+                                "format": ".1f",
+                            },
+                        ],
+                    },
+                    "config": {
+                        "view": {"stroke": None},
+                        "axis": {"labelFont": "Segoe UI", "titleFont": "Segoe UI"},
+                    },
                 },
+                use_container_width=True,
+                theme=None,
             )
         else:
             st.info("لا تتوفر بيانات كافية لرسم مؤشرات البنود.")

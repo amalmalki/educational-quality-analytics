@@ -13,13 +13,121 @@ import streamlit as st
 # إعداد الصفحة
 # ============================================================
 st.set_page_config(
-    page_title="Educational Quality Analytics",
+    page_title="منصة تحليلات الجودة التعليمية",
     page_icon="📊",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("Educational Quality Analytics")
-st.caption("منصة ذكية لتحليل الاستبانات التعليمية متعددة الصيغ")
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700;800&display=swap');
+
+    :root {
+        --primary: #136f63;
+        --primary-dark: #0b4f47;
+        --secondary: #d9a441;
+        --ink: #16302d;
+        --muted: #627773;
+        --surface: #ffffff;
+        --soft: #f2f8f6;
+        --line: #dce9e6;
+    }
+
+    html, body, [class*="css"], [data-testid="stAppViewContainer"] {
+        font-family: "Tajawal", sans-serif;
+    }
+    [data-testid="stAppViewContainer"] {
+        direction: rtl;
+        background:
+          radial-gradient(circle at 12% 8%, rgba(217,164,65,.10), transparent 24rem),
+          linear-gradient(180deg, #f7fbfa 0%, #ffffff 35%);
+        color: var(--ink);
+    }
+    [data-testid="stMainBlockContainer"] {max-width: 1320px; padding-top: 1.5rem;}
+    [data-testid="stSidebar"] {direction: rtl; border-left: 1px solid var(--line);}
+    [data-testid="stSidebar"] > div {background: #f7fbfa;}
+    h1, h2, h3 {color: var(--ink); letter-spacing: -.02em;}
+    h2 {border-right: 4px solid var(--secondary); padding-right: .7rem; margin-top: 2rem;}
+
+    .hero {
+        position: relative; overflow: hidden; color: white;
+        background: linear-gradient(125deg, #0b4f47 0%, #136f63 58%, #238c7d 100%);
+        border-radius: 26px; padding: 2.35rem 2.5rem; margin-bottom: 1.35rem;
+        box-shadow: 0 18px 45px rgba(11,79,71,.18);
+    }
+    .hero:after {
+        content:""; position:absolute; width:260px; height:260px; left:-65px; top:-105px;
+        border: 42px solid rgba(255,255,255,.07); border-radius:50%;
+    }
+    .hero-kicker {font-size:.88rem; font-weight:700; color:#ffe6ac; margin-bottom:.55rem;}
+    .hero h1 {color:white; margin:0 0 .55rem; font-size:clamp(2rem,4vw,3.25rem); line-height:1.15;}
+    .hero p {margin:0; color:#e5f4f1; font-size:1.08rem; max-width:760px;}
+    .hero-badges {display:flex; gap:.55rem; flex-wrap:wrap; margin-top:1.2rem;}
+    .hero-badge {background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2); padding:.38rem .75rem; border-radius:99px; font-size:.82rem;}
+
+    .feature-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; margin:.8rem 0 1.2rem;}
+    .feature-card {background:white; border:1px solid var(--line); border-radius:17px; padding:1rem 1.1rem; box-shadow:0 6px 20px rgba(22,48,45,.04);}
+    .feature-card b {display:block; color:var(--primary-dark); margin-bottom:.2rem;}
+    .feature-card span {font-size:.87rem; color:var(--muted);}
+
+    [data-testid="stFileUploader"] {background:white; border:1px dashed #7bb9ae; border-radius:20px; padding:1rem; box-shadow:0 8px 28px rgba(19,111,99,.07);}
+    [data-testid="stFileUploaderDropzone"] {background:var(--soft); border-radius:14px; min-height:135px;}
+    [data-testid="stMetric"] {background:white; border:1px solid var(--line); border-radius:16px; padding:1rem; box-shadow:0 5px 18px rgba(22,48,45,.04);}
+    [data-testid="stMetricValue"] {color:var(--primary-dark); font-weight:800;}
+    [data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:14px; overflow:hidden;}
+    [data-testid="stExpander"] {background:white; border:1px solid var(--line); border-radius:15px;}
+    .stButton > button, .stDownloadButton > button {
+        border-radius:12px; min-height:2.8rem; font-weight:700; border:1px solid var(--primary);
+    }
+    .stDownloadButton > button {background:var(--primary); color:white; width:100%;}
+    .stDownloadButton > button:hover {background:var(--primary-dark); color:white; border-color:var(--primary-dark);}
+    .privacy-note {background:#fffaf0; border:1px solid #f0d69b; color:#6f5317; border-radius:13px; padding:.75rem .9rem; font-size:.85rem; margin:.7rem 0 1rem;}
+    .step {display:flex; gap:.65rem; align-items:flex-start; margin:.7rem 0; color:var(--muted); font-size:.88rem;}
+    .step-num {min-width:25px; height:25px; display:grid; place-items:center; border-radius:50%; background:#dcefeb; color:var(--primary-dark); font-weight:800;}
+    .footer {text-align:center; color:var(--muted); font-size:.8rem; padding:2.5rem 0 1rem;}
+    @media (max-width: 760px) {
+        [data-testid="stMainBlockContainer"] {padding:1rem .75rem;}
+        .hero {padding:1.6rem 1.25rem; border-radius:19px;}
+        .feature-grid {grid-template-columns:1fr;}
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <section class="hero">
+      <div class="hero-kicker">EDUCATIONAL QUALITY ANALYTICS</div>
+      <h1>منصة تحليلات الجودة التعليمية</h1>
+      <p>حوّل ملفات الاستبانات إلى مؤشرات جودة قابلة للقراءة، مع فحص البيانات والتحليل الوصفي وقياس الثبات الداخلي.</p>
+      <div class="hero-badges">
+        <span class="hero-badge">قراءة ذكية للملفات</span>
+        <span class="hero-badge">استبعاد المعرّفات</span>
+        <span class="hero-badge">تقارير Excel</span>
+      </div>
+    </section>
+    """,
+    unsafe_allow_html=True,
+)
+
+with st.sidebar:
+    st.markdown("### دليل الاستخدام")
+    st.markdown(
+        """
+        <div class="step"><span class="step-num">1</span><span>ارفع ملف الاستبانة أو ملف النتائج.</span></div>
+        <div class="step"><span class="step-num">2</span><span>راجع نوع البيانات الذي اكتشفته المنصة.</span></div>
+        <div class="step"><span class="step-num">3</span><span>تحقق من الأسئلة والمعرّفات المستبعدة.</span></div>
+        <div class="step"><span class="step-num">4</span><span>راجع المؤشرات ونزّل تقرير Excel.</span></div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.divider()
+    st.markdown("#### الصيغ المدعومة")
+    st.caption("Excel · CSV · TSV · ODS · PDF · Word · TXT · JSON · XML · Parquet · HTML")
+    st.info("أفضل نتيجة تحليلية تتحقق عندما تكون الاستجابات في جدول واضح: صف لكل مشارك وعمود لكل سؤال.")
 
 
 # ============================================================
@@ -817,8 +925,19 @@ def prepare_excel_report(
 # ============================================================
 # واجهة رفع الملف
 # ============================================================
+st.markdown(
+    """
+    <div class="feature-grid">
+      <div class="feature-card"><b>① اكتشاف تلقائي</b><span>تحديد بنية الاستبانة ونوع البيانات ودرجة الثقة.</span></div>
+      <div class="feature-card"><b>② تحليل موثوق</b><span>وصف إحصائي، مؤشر رضا، جودة بيانات وثبات داخلي.</span></div>
+      <div class="feature-card"><b>③ تقرير قابل للتنزيل</b><span>ملف Excel منظم يضم الملخص والنتائج التفصيلية.</span></div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 uploaded_file = st.file_uploader(
-    "ارفع ملف الاستبانة أو نتائجها",
+    "ابدأ برفع ملف الاستبانة أو نتائجها",
     type=SUPPORTED_EXTENSIONS,
     help=(
         "مدعوم: Excel, CSV, TSV, ODS, PDF, Word DOCX, TXT, JSON, XML, "
@@ -827,7 +946,11 @@ uploaded_file = st.file_uploader(
 )
 
 if not uploaded_file:
-    st.info("ارفع ملفًا للبدء.")
+    st.markdown(
+        '<div class="privacy-note">🔒 تنبيه: تجنب رفع الأسماء والأرقام الجامعية وأي بيانات شخصية غير لازمة للتحليل.</div>',
+        unsafe_allow_html=True,
+    )
+    st.info("بانتظار ملف البيانات للبدء في التحليل.", icon="📂")
     st.stop()
 
 
@@ -845,7 +968,8 @@ if not candidates:
     st.error("لم يتم العثور على بيانات قابلة للتحليل داخل الملف.")
     st.stop()
 
-st.success(f"تمت قراءة الملف بنجاح: {uploaded_file.name}")
+st.success(f"تمت قراءة الملف بنجاح: {uploaded_file.name}", icon="✅")
+st.progress(25, text="المرحلة 1 من 4 — تمت قراءة الملف واستخراج البيانات")
 
 if reader_note:
     st.caption(reader_note)
@@ -872,7 +996,7 @@ if raw_df.empty:
 # ============================================================
 detected_type, detection_confidence, detection_reason = detect_dataset_type(raw_df)
 
-st.subheader("Smart File Analyzer")
+st.subheader("المحلل الذكي للملف")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("نوع الملف", extension.upper())
@@ -880,8 +1004,10 @@ c2.metric("الصفوف", f"{len(raw_df):,}")
 c3.metric("الأعمدة", len(raw_df.columns))
 c4.metric("ثقة الاكتشاف", f"{detection_confidence * 100:.0f}%")
 
-st.write(f"**نوع البيانات المكتشف:** {dataset_type_label(detected_type)}")
-st.caption(detection_reason)
+st.info(
+    f"**نوع البيانات المكتشف:** {dataset_type_label(detected_type)}  \n{detection_reason}",
+    icon="🧠",
+)
 
 dataset_options = {
     "استجابات فردية Raw / Respondent-level": "respondent_level",
@@ -905,8 +1031,10 @@ override_label = st.selectbox(
 
 dataset_type = dataset_options[override_label]
 
-with st.expander("معاينة البيانات", expanded=True):
+with st.expander("معاينة البيانات الأولية", expanded=True):
     st.dataframe(raw_df.head(30), use_container_width=True)
+
+st.progress(50, text="المرحلة 2 من 4 — تم اكتشاف بنية البيانات")
 
 
 # ============================================================
@@ -1057,6 +1185,7 @@ if suspicious_columns:
     )
 
 analysis_df = converted_df[selected_columns].copy()
+st.progress(75, text="المرحلة 3 من 4 — تم اعتماد الأعمدة الجاهزة للتحليل")
 
 # ============================================================
 # فحص الجودة
@@ -1138,6 +1267,15 @@ if scale_span > 0:
     ).clip(0, 100).round(2)
 
     st.dataframe(satisfaction_df, use_container_width=True)
+
+    chart_df = (
+        satisfaction_df
+        .set_index("السؤال")[["مؤشر الرضا %"]]
+        .sort_values("مؤشر الرضا %", ascending=False)
+        .head(20)
+    )
+    st.caption("مقارنة مؤشر الرضا بين البنود — أعلى 20 بندًا")
+    st.bar_chart(chart_df, color="#136f63", horizontal=True)
 else:
     satisfaction_df = pd.DataFrame()
 
@@ -1214,6 +1352,19 @@ m2.metric("عدد الأسئلة", len(selected_columns))
 m3.metric("المتوسط العام", f"{overall_mean:.3f}")
 m4.metric("الرضا العام", f"{overall_satisfaction:.1f}%")
 
+if not satisfaction_df.empty:
+    best_item = satisfaction_df.loc[satisfaction_df["مؤشر الرضا %"].idxmax()]
+    weakest_item = satisfaction_df.loc[satisfaction_df["مؤشر الرضا %"].idxmin()]
+    insight_left, insight_right = st.columns(2)
+    insight_left.success(
+        f"أعلى بند رضا: **{best_item['السؤال']}** — {best_item['مؤشر الرضا %']:.1f}%",
+        icon="↗️",
+    )
+    insight_right.warning(
+        f"البند الأكثر حاجة للتحسين: **{weakest_item['السؤال']}** — {weakest_item['مؤشر الرضا %']:.1f}%",
+        icon="🎯",
+    )
+
 
 # ============================================================
 # تنزيل النتائج
@@ -1250,11 +1401,17 @@ with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
 output.seek(0)
 
+st.progress(100, text="المرحلة 4 من 4 — اكتمل التحليل وأصبح التقرير جاهزًا")
+
 st.download_button(
-    "تنزيل تقرير Excel",
+    "تنزيل تقرير Excel الكامل",
     data=output,
     file_name="educational_quality_analysis.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-st.success("اكتمل التحليل.")
+st.success("اكتمل التحليل وأصبح التقرير جاهزًا للتنزيل.", icon="✅")
+st.markdown(
+    '<div class="footer">منصة تحليلات الجودة التعليمية · تحليل البيانات لاتخاذ قرارات قابلة للقياس</div>',
+    unsafe_allow_html=True,
+)

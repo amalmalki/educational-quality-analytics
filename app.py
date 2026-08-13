@@ -4,11 +4,13 @@ import re
 import csv
 import zipfile
 import hmac
+import hashlib
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # ============================================================
@@ -21,11 +23,21 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ضبط لغة واتجاه المستند لقارئات الشاشة؛ CSS وحده لا يغيّر خصائص HTML الجذرية.
+components.html(
+    """
+    <script>
+      const root = window.parent.document.documentElement;
+      root.setAttribute("lang", "ar");
+      root.setAttribute("dir", "rtl");
+    </script>
+    """,
+    height=0,
+)
+
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700;800&display=swap');
-
     :root {
         --primary: #136f63;
         --primary-dark: #0b4f47;
@@ -38,7 +50,7 @@ st.markdown(
     }
 
     html, body, [class*="css"], [data-testid="stAppViewContainer"] {
-        font-family: "Tajawal", sans-serif;
+        font-family: "Tajawal", "Segoe UI", Tahoma, sans-serif;
     }
     [data-testid="stAppViewContainer"] {
         direction: rtl;
@@ -170,6 +182,11 @@ SUPPORTED_EXTENSIONS = [
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 100_000
 MAX_COLUMNS = 500
+MAX_TOTAL_CELLS = 10_000_000
+MAX_HEADER_LENGTH = 1_000
+MAX_DISPLAY_HEADER_LENGTH = 120
+MAX_TOTAL_HEADER_CHARS = 100_000
+MAX_EXCEL_CELL_CHARS = 32_767
 MAX_EXCEL_SHEETS = 30
 MAX_PDF_PAGES = 200
 MAX_EXTRACTED_TABLES = 100
@@ -195,14 +212,17 @@ AGGREGATE_TOKENS = [
 ]
 
 QUESTION_TOKENS = [
-    "question", "item", "statement", "survey item", "q",
+    "question", "item", "statement", "survey item",
     "السؤال", "العبارة", "البند", "الفقرة",
 ]
 
 IDENTIFIER_TOKENS = [
-    "id", "participant_id", "student_id", "respondent_id", "record_id",
-    "email", "phone", "mobile", "name", "username",
-    "رقم", "معرف", "الرقم الجامعي", "رقم الطالب", "رقم المشارك",
+    "participant_id", "student_id", "respondent_id", "record_id",
+    "student_number", "participant_number", "respondent_number",
+    "employee_number", "record_number", "serial_number", "serial_no",
+    "email", "phone", "mobile", "username", "user_id",
+    "معرف", "الرقم الجامعي", "رقم الطالب", "رقم المشارك",
+    "رقم الموظف", "الرقم الوظيفي", "الرقم التسلسلي",
     "البريد", "الجوال", "الهاتف", "الاسم",
 ]
 
@@ -210,6 +230,10 @@ IDENTIFIER_TOKENS = [
 # ============================================================
 # أدوات مساعدة
 # ============================================================
+class UserInputError(ValueError):
+    """خطأ متوقع وآمن يمكن عرضه للمستخدم دون كشف تفاصيل الخادم."""
+
+
 def normalize_text(value) -> str:
     text = str(value).strip().lower()
     text = re.sub(r"\s+", " ", text)
@@ -261,38 +285,46 @@ def validate_zip_container(raw_bytes: bytes, extension: str):
         with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
             infos = archive.infolist()
             if len(infos) > MAX_ZIP_ENTRIES:
-                raise ValueError("يحتوي الملف على عدد مفرط من المكونات الداخلية.")
+                raise UserInputError("يحتوي الملف على عدد مفرط من المكونات الداخلية.")
 
             total_uncompressed = sum(item.file_size for item in infos)
             total_compressed = sum(max(item.compress_size, 1) for item in infos)
             ratio = total_uncompressed / max(total_compressed, 1)
 
             if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
-                raise ValueError("الحجم بعد فك الضغط يتجاوز الحد الآمن.")
+                raise UserInputError("الحجم بعد فك الضغط يتجاوز الحد الآمن.")
             if ratio > MAX_COMPRESSION_RATIO:
-                raise ValueError("نسبة الضغط غير طبيعية.")
+                raise UserInputError("نسبة الضغط غير طبيعية.")
 
             names = {item.filename.lower() for item in infos}
             if any(name.endswith("vbaproject.bin") for name in names):
-                raise ValueError("الملفات التي تحتوي وحدات ماكرو غير مسموحة.")
+                raise UserInputError("الملفات التي تحتوي وحدات ماكرو غير مسموحة.")
+
+            required_paths = {
+                "xlsx": "xl/workbook.xml",
+                "docx": "word/document.xml",
+            }
+            required = required_paths.get(extension)
+            if required and required not in names:
+                raise UserInputError("البنية الداخلية للملف لا تطابق امتداده.")
     except zipfile.BadZipFile as exc:
-        raise ValueError("بنية الملف المضغوط غير صالحة.") from exc
+        raise UserInputError("بنية الملف المضغوط غير صالحة.") from exc
 
 
 def validate_uploaded_file(uploaded_file) -> tuple[str, bytes]:
     """التحقق من الحجم والامتداد والبصمة الأولية قبل تمرير الملف إلى القارئ."""
     extension = Path(uploaded_file.name).suffix.lower().lstrip(".")
     if extension not in SUPPORTED_EXTENSIONS:
-        raise ValueError("نوع الملف غير مسموح.")
+        raise UserInputError("نوع الملف غير مسموح.")
 
     uploaded_file.seek(0)
     raw = uploaded_file.read()
     uploaded_file.seek(0)
 
     if not raw:
-        raise ValueError("الملف فارغ.")
+        raise UserInputError("الملف فارغ.")
     if len(raw) > MAX_UPLOAD_BYTES:
-        raise ValueError("حجم الملف يتجاوز 25 ميجابايت.")
+        raise UserInputError("حجم الملف يتجاوز 25 ميجابايت.")
 
     signatures = {
         "pdf": lambda b: b.startswith(b"%PDF-"),
@@ -304,7 +336,7 @@ def validate_uploaded_file(uploaded_file) -> tuple[str, bytes]:
     }
     check = signatures.get(extension)
     if check and not check(raw):
-        raise ValueError("محتوى الملف لا يطابق امتداده.")
+        raise UserInputError("محتوى الملف لا يطابق امتداده.")
 
     if extension in {"xlsx", "docx", "ods"}:
         validate_zip_container(raw, extension)
@@ -314,18 +346,27 @@ def validate_uploaded_file(uploaded_file) -> tuple[str, bytes]:
 
 def enforce_dataframe_limits(df: pd.DataFrame) -> pd.DataFrame:
     if len(df) > MAX_ROWS:
-        raise ValueError(f"عدد الصفوف يتجاوز الحد المسموح ({MAX_ROWS:,}).")
+        raise UserInputError(f"عدد الصفوف يتجاوز الحد المسموح ({MAX_ROWS:,}).")
     if len(df.columns) > MAX_COLUMNS:
-        raise ValueError(f"عدد الأعمدة يتجاوز الحد المسموح ({MAX_COLUMNS:,}).")
+        raise UserInputError(f"عدد الأعمدة يتجاوز الحد المسموح ({MAX_COLUMNS:,}).")
+    total_cells = len(df) * len(df.columns)
+    if total_cells > MAX_TOTAL_CELLS:
+        raise UserInputError(
+            f"حجم الجدول يتجاوز الحد التشغيلي الآمن ({MAX_TOTAL_CELLS:,} خلية). "
+            "قسّم الملف إلى أجزاء أصغر."
+        )
     return df
 
 
 def sanitize_excel_value(value):
     """منع تحول نصوص المستخدم إلى صيغ نشطة عند فتح تقرير Excel."""
     if isinstance(value, str):
-        stripped = value.lstrip()
+        cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]", "", value)
+        cleaned = cleaned[:MAX_EXCEL_CELL_CHARS]
+        stripped = cleaned.lstrip()
         if stripped.startswith(("=", "+", "-", "@")):
-            return "'" + value
+            cleaned = ("'" + cleaned)[:MAX_EXCEL_CELL_CHARS]
+        return cleaned
     return value
 
 
@@ -343,33 +384,145 @@ def safe_to_excel(df: pd.DataFrame, writer, sheet_name: str):
 
 def clean_numeric_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
-        return pd.to_numeric(series, errors="coerce")
+        return pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
 
-    cleaned = (
-        series.astype(str)
-        .str.strip()
-        .str.replace("٪", "", regex=False)
-        .str.replace("%", "", regex=False)
-        .str.replace("،", ".", regex=False)
-        .str.replace(",", ".", regex=False)
-        .str.replace("٫", ".", regex=False)
-        .str.replace("−", "-", regex=False)
-    )
-    return pd.to_numeric(cleaned, errors="coerce")
+    digit_map = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+
+    def normalize_number(value):
+        if pd.isna(value):
+            return np.nan
+        text = str(value).strip().translate(digit_map)
+        text = (
+            text.replace("٪", "")
+            .replace("%", "")
+            .replace("−", "-")
+            .replace("٬", "")
+            .replace("،", ",")
+            .replace("٫", ".")
+            .replace("\u00a0", "")
+            .replace(" ", "")
+        )
+
+        # عند وجود الفاصلة والنقطة، نعتبر آخرهما العلامة العشرية.
+        if "," in text and "." in text:
+            if text.rfind(",") > text.rfind("."):
+                text = text.replace(".", "").replace(",", ".")
+            else:
+                text = text.replace(",", "")
+        elif "," in text:
+            # 1,000 و1,000,000 فواصل آلاف؛ 2,5 فاصلة عشرية.
+            if re.fullmatch(r"[+-]?\d{1,3}(,\d{3})+", text):
+                text = text.replace(",", "")
+            else:
+                text = text.replace(",", ".")
+
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            return np.nan
+        return number if np.isfinite(number) else np.nan
+
+    return series.map(normalize_number)
+
+
+def exclude_out_of_range_values(df: pd.DataFrame, columns, minimum: float, maximum: float):
+    """إرجاع نسخة منظفة وعدد القيم المستبعدة لكل عمود."""
+    cleaned = df.copy()
+    excluded = {}
+    for col in columns:
+        invalid_mask = (
+            (cleaned[col] < minimum) | (cleaned[col] > maximum)
+        ).fillna(False)
+        count = int(invalid_mask.sum())
+        if count:
+            excluded[col] = count
+            cleaned.loc[invalid_mask, col] = np.nan
+    return cleaned, excluded
+
+
+def equal_weight_item_mean(descriptive_df: pd.DataFrame) -> float:
+    """المتوسط العام بوزن متساوٍ لكل بند، بصرف النظر عن عدد استجاباته."""
+    if descriptive_df.empty or "المتوسط" not in descriptive_df:
+        return np.nan
+    item_means = pd.to_numeric(descriptive_df["المتوسط"], errors="coerce").dropna()
+    return float(item_means.mean()) if not item_means.empty else np.nan
+
+
+def clean_header_text(value) -> str:
+    """تنظيف اسم العمود ومنع العناوين المفرطة أو غير الصالحة لـExcel."""
+    name = "" if value is None else str(value)
+    name = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]", "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    name = name or "Unnamed"
+    if len(name) > MAX_HEADER_LENGTH:
+        raise UserInputError(
+            f"يوجد اسم عمود يتجاوز الحد المسموح ({MAX_HEADER_LENGTH:,} حرف). "
+            "اختصر نص السؤال في رأس العمود ثم أعد رفع الملف."
+        )
+    return name
 
 
 def make_unique_columns(columns):
     seen = {}
     result = []
     for col in columns:
-        name = str(col).strip() if str(col).strip() else "Unnamed"
+        name = clean_header_text(col)
         if name not in seen:
             seen[name] = 0
             result.append(name)
         else:
             seen[name] += 1
-            result.append(f"{name}_{seen[name]}")
+            suffix = f"_{seen[name]}"
+            result.append(f"{name[:MAX_HEADER_LENGTH - len(suffix)]}{suffix}")
+
+    total_chars = sum(len(name) for name in result)
+    if total_chars > MAX_TOTAL_HEADER_CHARS:
+        raise UserInputError(
+            f"إجمالي أحرف أسماء الأعمدة يتجاوز الحد المسموح "
+            f"({MAX_TOTAL_HEADER_CHARS:,} حرف)."
+        )
     return result
+
+
+def build_header_aliases(columns):
+    """أسماء عرض قصيرة وفريدة مع إبقاء الاسم الكامل للتحليل والتوثيق."""
+    aliases = {}
+    used = set()
+    for index, column in enumerate(columns, start=1):
+        full_name = str(column)
+        if len(full_name) <= MAX_DISPLAY_HEADER_LENGTH:
+            alias = full_name
+        else:
+            prefix = f"Q{index:03d} · "
+            available = MAX_DISPLAY_HEADER_LENGTH - len(prefix) - 1
+            alias = f"{prefix}{full_name[:available]}…"
+
+        candidate = alias
+        counter = 1
+        while candidate in used:
+            suffix = f" [{counter}]"
+            candidate = f"{alias[:MAX_DISPLAY_HEADER_LENGTH - len(suffix)]}{suffix}"
+            counter += 1
+        aliases[column] = candidate
+        used.add(candidate)
+    return aliases
+
+
+def build_header_mapping(columns, aliases):
+    return pd.DataFrame([
+        {
+            "رقم العمود": index,
+            "اسم العرض المختصر": aliases[column],
+            "الاسم الأصلي الكامل": str(column),
+            "عدد الأحرف": len(str(column)),
+            "تم الاختصار": "نعم" if aliases[column] != str(column) else "لا",
+        }
+        for index, column in enumerate(columns, start=1)
+    ])
+
+
+def rename_columns_for_display(df: pd.DataFrame, aliases):
+    return df.rename(columns={column: aliases.get(column, column) for column in df.columns})
 
 
 def tidy_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -446,10 +599,13 @@ def detect_delimiter(text_sample: str, default=",") -> str:
 
 def looks_like_identifier(column_name: str, series: pd.Series) -> bool:
     name = normalize_text(column_name)
+    canonical_name = re.sub(r"[\s-]+", "_", name)
 
     name_suspicious = (
-        any(token in name for token in IDENTIFIER_TOKENS)
+        canonical_name in IDENTIFIER_TOKENS
+        or any(token in name for token in IDENTIFIER_TOKENS if re.search(r"[\u0600-\u06ff]", token))
         or bool(re.search(r"(^|[_\s-])id($|[_\s-])", name))
+        or name in {"id", "name", "الاسم", "رقم", "code", "serial"}
     )
 
     numeric = pd.to_numeric(series, errors="coerce").dropna()
@@ -482,7 +638,10 @@ def is_aggregate_column_name(column_name: str) -> bool:
 
 def is_question_column_name(column_name: str) -> bool:
     name = normalize_text(column_name)
-    return any(token == name or token in name for token in QUESTION_TOKENS)
+    return (
+        any(token == name or token in name for token in QUESTION_TOKENS)
+        or bool(re.fullmatch(r"q[\s_-]*\d+", name))
+    )
 
 
 def convert_numeric_candidates(df: pd.DataFrame, threshold: float = 0.70) -> pd.DataFrame:
@@ -509,12 +668,18 @@ def convert_numeric_candidates(df: pd.DataFrame, threshold: float = 0.70) -> pd.
 def read_excel_like(uploaded_file, extension: str):
     uploaded_file.seek(0)
 
-    if extension == "ods":
-        excel = pd.ExcelFile(uploaded_file, engine="odf")
-    elif extension == "xls":
-        excel = pd.ExcelFile(uploaded_file, engine="xlrd")
-    else:
-        excel = pd.ExcelFile(uploaded_file)
+    try:
+        if extension == "ods":
+            excel = pd.ExcelFile(uploaded_file, engine="odf")
+        elif extension == "xls":
+            excel = pd.ExcelFile(uploaded_file, engine="xlrd")
+        else:
+            excel = pd.ExcelFile(uploaded_file)
+    except ImportError as exc:
+        raise UserInputError(
+            "مكتبة قراءة هذا النوع غير مثبتة على الخادم. "
+            "راجع ملف requirements.txt ثم أعد نشر المنصة."
+        ) from exc
 
     if len(excel.sheet_names) > MAX_EXCEL_SHEETS:
         raise ValueError(f"عدد أوراق العمل يتجاوز الحد المسموح ({MAX_EXCEL_SHEETS}).")
@@ -598,8 +763,27 @@ def read_xml_file(uploaded_file):
 
 
 def read_parquet_file(uploaded_file):
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise UserInputError(
+            "مكتبة PyArrow المطلوبة لقراءة Parquet غير مثبتة على الخادم."
+        ) from exc
+
     uploaded_file.seek(0)
-    df = pd.read_parquet(uploaded_file)
+    parquet_file = pq.ParquetFile(uploaded_file)
+    metadata = parquet_file.metadata
+    if metadata.num_rows > MAX_ROWS:
+        raise UserInputError(f"عدد الصفوف يتجاوز الحد المسموح ({MAX_ROWS:,}).")
+    if metadata.num_columns > MAX_COLUMNS:
+        raise UserInputError(f"عدد الأعمدة يتجاوز الحد المسموح ({MAX_COLUMNS:,}).")
+    if metadata.num_rows * metadata.num_columns > MAX_TOTAL_CELLS:
+        raise UserInputError(
+            f"حجم جدول Parquet يتجاوز الحد التشغيلي الآمن ({MAX_TOTAL_CELLS:,} خلية)."
+        )
+
+    uploaded_file.seek(0)
+    df = pd.read_parquet(uploaded_file, engine="pyarrow")
     df = tidy_dataframe(df)
     return {"Parquet data": df}, None
 
@@ -839,47 +1023,56 @@ def detect_dataset_type(df: pd.DataFrame):
         for col in normalized_columns
     )
 
-    question_name_count = sum(
-        any(token == col or token in col for token in QUESTION_TOKENS)
-        for col in normalized_columns
-    )
+    question_name_count = sum(is_question_column_name(col) for col in normalized_columns)
 
     converted = convert_numeric_candidates(df)
     numeric_cols = converted.select_dtypes(include=np.number).columns.tolist()
+    non_numeric_cols = [c for c in converted.columns if c not in numeric_cols]
 
-    if likert_count >= 2:
+    candidate_questions = []
+    for col in numeric_cols:
+        if not looks_like_identifier(col, converted[col]):
+            nunique = converted[col].nunique(dropna=True)
+            values = converted[col].dropna()
+            if (
+                2 <= nunique <= 15
+                and not values.empty
+                and values.min() >= -1
+                and values.max() <= 10
+            ):
+                candidate_questions.append(col)
+
+    # التوزيع التكراري يحتاج فئات Likert متعددة مع عمود يصف السؤال/البند.
+    # هذا يمنع اعتبار استجابات الأفراد توزيعًا لمجرد أسماء بعض الأعمدة.
+    has_question_descriptor = question_name_count >= 1 or bool(non_numeric_cols)
+    if likert_count >= 2 and has_question_descriptor:
         return (
             "frequency_distribution",
             min(0.98, 0.75 + 0.05 * likert_count),
             "تم اكتشاف عدة أعمدة تحمل تسميات فئات Likert.",
         )
 
-    if question_name_count >= 1 and aggregate_count >= 1:
+    # الاستجابات الفردية ذات أعمدة قصيرة النطاق لها الأولوية على كلمات عامة
+    # مثل rate وaverage التي قد تظهر كمتغير عادي داخل صف المشارك.
+    if len(candidate_questions) >= 2 and len(df) >= 5:
+        return (
+            "respondent_level",
+            min(0.98, 0.75 + 0.03 * len(candidate_questions)),
+            "تم اكتشاف عدة أعمدة رقمية قصيرة النطاق تبدو كإجابات أفراد.",
+        )
+
+    if question_name_count >= 1 and aggregate_count >= 2:
         return (
             "aggregated",
             min(0.98, 0.75 + 0.05 * aggregate_count),
             "يوجد عمود للسؤال مع أعمدة متوسط/نسبة/تكرار أو مؤشرات مجمعة.",
         )
 
-    if aggregate_count >= 2:
+    if aggregate_count >= 2 and (has_question_descriptor or len(df) < 5):
         return (
             "aggregated",
             min(0.95, 0.70 + 0.05 * aggregate_count),
             "تم اكتشاف عدة أعمدة لمؤشرات إحصائية مجمعة.",
-        )
-
-    candidate_questions = []
-    for col in numeric_cols:
-        if not looks_like_identifier(col, converted[col]):
-            nunique = converted[col].nunique(dropna=True)
-            if 2 <= nunique <= 15:
-                candidate_questions.append(col)
-
-    if len(candidate_questions) >= 2:
-        return (
-            "respondent_level",
-            min(0.98, 0.75 + 0.03 * len(candidate_questions)),
-            "تم اكتشاف عدة أعمدة رقمية قصيرة النطاق تبدو كإجابات أفراد.",
         )
 
     if len(numeric_cols) >= 2 and len(df) >= 5:
@@ -956,18 +1149,32 @@ def infer_scale(df: pd.DataFrame, columns):
     common_scales = [
         (1.0, 5.0),
         (1.0, 7.0),
-        (1.0, 10.0),
         (0.0, 4.0),
         (0.0, 5.0),
+        (1.0, 10.0),
         (0.0, 10.0),
     ]
 
+    # أعلى ثقة فقط عندما تظهر نهايتا المقياس فعلًا.
+    for lo, hi in common_scales:
+        if np.isclose(actual_min, lo) and np.isclose(actual_max, hi):
+            return lo, hi, 0.98
+
+    # ظهور الحد الأدنى يسمح باقتراح منخفض/متوسط الثقة. لا نعتمد الحد الأعلى
+    # وحده لأن قيم 2–4 مثلًا قد تخص مقياس 1–5 لا مقياس 0–4.
     for lo, hi in common_scales:
         if actual_min >= lo and actual_max <= hi:
-            if np.isclose(actual_min, lo) or np.isclose(actual_max, hi):
-                return lo, hi, 0.90
+            if np.isclose(actual_min, lo):
+                return lo, hi, 0.65
 
-    return actual_min, actual_max, 0.60
+    # إذا كانت القيم 2–4 مثلًا، فالحدود الأصلية غير قابلة للاستنتاج من العينة.
+    # نعرض 1–5 كافتراض عملي شائع وبثقة منخفضة ليصححه المستخدم عند الحاجة.
+    if actual_min >= 1 and actual_max <= 5:
+        return 1.0, 5.0, 0.35
+    if actual_min >= 0 and actual_max <= 4:
+        return 0.0, 4.0, 0.35
+
+    return actual_min, actual_max, 0.25
 
 
 # ============================================================
@@ -1060,6 +1267,7 @@ def prepare_excel_report(
     frequency_df=None,
     selected_df=None,
     source_df=None,
+    header_mapping_df=None,
 ):
     output = io.BytesIO()
 
@@ -1080,6 +1288,9 @@ def prepare_excel_report(
 
         if source_df is not None and not source_df.empty:
             safe_to_excel(source_df.head(50000), writer, "Source Preview")
+
+        if header_mapping_df is not None and not header_mapping_df.empty:
+            safe_to_excel(header_mapping_df, writer, "Column Mapping")
 
     output.seek(0)
     return output
@@ -1166,7 +1377,8 @@ if not uploaded_file:
     st.info("بانتظار ملف البيانات للبدء في التحليل.", icon="📂")
     st.stop()
 
-file_key = f"{uploaded_file.name}:{uploaded_file.size}"
+uploaded_digest = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+file_key = f"{uploaded_file.name}:{uploaded_digest}"
 
 st.success(
     f"تم استلام الملف **{uploaded_file.name}** وحجمه {uploaded_file.size / 1024:.1f} كيلوبايت. "
@@ -1197,6 +1409,9 @@ try:
     with st.spinner("جارٍ التحقق من صيغة الملف وقراءة محتواه..."):
         (loaded_result, extension) = load_file(uploaded_file)
         candidates, reader_note = loaded_result
+except UserInputError as exc:
+    st.error(str(exc))
+    st.stop()
 except Exception:
     user_safe_error("قراءة الملف")
     st.stop()
@@ -1215,9 +1430,18 @@ if reader_note:
 candidate_names = list(candidates.keys())
 
 if len(candidate_names) > 1:
+    # نفضّل افتراضيًا أكبر جدول فعلي بدل كائن metadata من صف واحد.
+    default_candidate = max(
+        candidate_names,
+        key=lambda name: (
+            len(candidates[name]) * max(len(candidates[name].columns), 1),
+            len(candidates[name]),
+        ),
+    )
     selected_candidate = st.selectbox(
         "تم العثور على أكثر من جدول/قسم. اختر البيانات المطلوب تحليلها",
         candidate_names,
+        index=candidate_names.index(default_candidate),
     )
 else:
     selected_candidate = candidate_names[0]
@@ -1233,6 +1457,22 @@ st.info(
 if raw_df.empty:
     st.error("الجزء المحدد لا يحتوي على بيانات.")
     st.stop()
+
+header_aliases = build_header_aliases(raw_df.columns)
+header_mapping_df = build_header_mapping(raw_df.columns, header_aliases)
+long_header_count = int((header_mapping_df["تم الاختصار"] == "نعم").sum())
+
+if long_header_count:
+    st.info(
+        f"اكتشفت المنصة **{long_header_count} عنوانًا طويلًا**. "
+        "ستُستخدم أسماء مختصرة في العرض، مع حفظ النص الكامل في ورقة Column Mapping بالتقرير.",
+        icon="🏷️",
+    )
+    with st.expander("خريطة العناوين الطويلة", expanded=False):
+        st.dataframe(
+            header_mapping_df[header_mapping_df["تم الاختصار"] == "نعم"],
+            use_container_width=True,
+        )
 
 
 # ============================================================
@@ -1276,7 +1516,10 @@ override_label = st.selectbox(
 dataset_type = dataset_options[override_label]
 
 with st.expander("معاينة البيانات الأولية", expanded=True):
-    st.dataframe(raw_df.head(30), use_container_width=True)
+    st.dataframe(
+        rename_columns_for_display(raw_df.head(30), header_aliases),
+        use_container_width=True,
+    )
 
 st.progress(50, text="المرحلة 2 من 4 — تم اكتشاف بنية البيانات")
 
@@ -1306,11 +1549,17 @@ if dataset_type == "text":
         "ملاحظة": "النص يحتاج تحويلًا إلى جدول أو استخراجًا أكثر تخصصًا قبل التحليل الإحصائي.",
     }])
 
-    output = prepare_excel_report(summary_df, source_df=raw_df)
+    text_report_df = rename_columns_for_display(raw_df, header_aliases)
+    output = prepare_excel_report(
+        summary_df,
+        source_df=text_report_df,
+        header_mapping_df=header_mapping_df,
+    )
 
     show_report_preview({
         "الملخص": summary_df,
-        "المحتوى المستخرج": raw_df,
+        "المحتوى المستخرج": text_report_df,
+        "خريطة الأعمدة": header_mapping_df,
     })
 
     st.download_button(
@@ -1330,7 +1579,8 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
     st.subheader("البيانات المستخرجة")
 
     converted_df = convert_numeric_candidates(raw_df)
-    st.dataframe(converted_df, use_container_width=True)
+    aggregate_display_df = rename_columns_for_display(converted_df, header_aliases)
+    st.dataframe(aggregate_display_df, use_container_width=True)
 
     numeric_columns = converted_df.select_dtypes(include=np.number).columns.tolist()
 
@@ -1339,7 +1589,7 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
         if likert_columns:
             st.info(
                 "اكتشفت المنصة أعمدة فئات استجابة Likert: "
-                + "، ".join(likert_columns)
+                + "، ".join(header_aliases.get(col, col) for col in likert_columns)
             )
 
     st.info(
@@ -1352,6 +1602,9 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
     if numeric_columns:
         aggregate_summary = converted_df[numeric_columns].describe().T.reset_index()
         aggregate_summary = aggregate_summary.rename(columns={"index": "المتغير"})
+        aggregate_summary["المتغير"] = aggregate_summary["المتغير"].map(
+            lambda value: header_aliases.get(value, value)
+        )
         st.subheader("ملخص الحقول الرقمية")
         st.dataframe(aggregate_summary, use_container_width=True)
 
@@ -1367,16 +1620,18 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         safe_to_excel(summary_df, writer, "Summary")
-        safe_to_excel(converted_df, writer, "Extracted Data")
+        safe_to_excel(aggregate_display_df, writer, "Extracted Data")
         if not aggregate_summary.empty:
             safe_to_excel(aggregate_summary, writer, "Numeric Summary")
+        safe_to_excel(header_mapping_df, writer, "Column Mapping")
 
     output.seek(0)
 
     show_report_preview({
         "الملخص": summary_df,
-        "البيانات المستخرجة": converted_df,
+        "البيانات المستخرجة": aggregate_display_df,
         "الملخص الرقمي": aggregate_summary,
+        "خريطة الأعمدة": header_mapping_df,
     })
 
     st.download_button(
@@ -1398,7 +1653,7 @@ converted_df, auto_question_columns, auto_identifier_columns = detect_question_c
 if auto_identifier_columns:
     st.info(
         "استبعدت المنصة مبدئيًا الأعمدة التالية من أسئلة التحليل لأنها تبدو كمعرّفات: "
-        + "، ".join(auto_identifier_columns),
+        + "، ".join(header_aliases.get(col, col) for col in auto_identifier_columns),
         icon="🛡️",
     )
 
@@ -1432,6 +1687,7 @@ selected_columns = st.multiselect(
         if auto_question_columns
         else [c for c in numeric_columns if c not in auto_identifier_columns]
     ),
+    format_func=lambda column: header_aliases.get(column, column),
     help="لا تُدخل المعرّفات مثل رقم الطالب أو رقم المشارك ضمن الأسئلة.",
 )
 
@@ -1447,11 +1703,20 @@ suspicious_columns = [
 if suspicious_columns:
     st.warning(
         "الأعمدة التالية تبدو كمعرّفات أو أرقام تسلسلية: "
-        + "، ".join(suspicious_columns)
+        + "، ".join(header_aliases.get(col, col) for col in suspicious_columns)
         + ". يفضّل إزالتها من اختيار الأسئلة."
     )
 
 analysis_df = converted_df[selected_columns].copy()
+
+valid_value_count = int(analysis_df.notna().sum().sum())
+if valid_value_count == 0:
+    st.error(
+        "الأعمدة المختارة لا تحتوي قيمًا رقمية صالحة للتحليل. "
+        "غيّر الأعمدة أو راجع تنسيق القيم في الملف."
+    )
+    st.stop()
+
 st.progress(75, text="المرحلة 3 من 4 — تم اعتماد الأعمدة الجاهزة للتحليل")
 
 # ============================================================
@@ -1459,29 +1724,47 @@ st.progress(75, text="المرحلة 3 من 4 — تم اعتماد الأعمد
 # ============================================================
 st.subheader("فحص جودة البيانات")
 
-quality_df = build_quality(
+quality_before_df = build_quality(
     analysis_df,
     selected_columns,
     suspicious_columns,
 )
-st.dataframe(quality_df, use_container_width=True)
+quality_before_display_df = quality_before_df.copy()
+quality_before_display_df["العمود"] = quality_before_display_df["العمود"].map(
+    lambda value: header_aliases.get(value, value)
+)
+st.dataframe(quality_before_display_df, use_container_width=True)
 
 auto_min, auto_max, scale_confidence = infer_scale(analysis_df, selected_columns)
 
 with st.expander("خيارات مقياس الاستجابة", expanded=True):
+    scale_options = {
+        "تلقائي وفق البيانات": (float(auto_min), float(auto_max)),
+        "Likert من 1 إلى 5": (1.0, 5.0),
+        "Likert من 1 إلى 7": (1.0, 7.0),
+        "مقياس من 0 إلى 4": (0.0, 4.0),
+        "مقياس من 0 إلى 5": (0.0, 5.0),
+        "مقياس من 1 إلى 10": (1.0, 10.0),
+        "مخصص": None,
+    }
+    selected_scale = st.selectbox(
+        "اختر مقياس الاستجابة الأصلي",
+        list(scale_options.keys()),
+        help="اختيار المقياس الأصلي أدق من استنتاجه من عينة قد لا تحتوي الحدين الأدنى والأعلى.",
+    )
+
     sc1, sc2, sc3 = st.columns(3)
+    preset = scale_options[selected_scale]
+    if preset is None:
+        expected_min = sc1.number_input("أقل قيمة متوقعة", value=float(auto_min))
+        expected_max = sc2.number_input("أعلى قيمة متوقعة", value=float(auto_max))
+    else:
+        expected_min, expected_max = preset
+        sc1.metric("أقل قيمة متوقعة", f"{expected_min:g}")
+        sc2.metric("أعلى قيمة متوقعة", f"{expected_max:g}")
 
-    expected_min = sc1.number_input(
-        "أقل قيمة متوقعة",
-        value=float(auto_min),
-    )
-
-    expected_max = sc2.number_input(
-        "أعلى قيمة متوقعة",
-        value=float(auto_max),
-    )
-
-    sc3.metric("ثقة اكتشاف المقياس", f"{scale_confidence * 100:.0f}%")
+    confidence_to_show = scale_confidence if selected_scale.startswith("تلقائي") else 1.0
+    sc3.metric("ثقة تحديد المقياس", f"{confidence_to_show * 100:.0f}%")
 
 st.info(
     f"المقياس المستخدم حاليًا من **{expected_min:g}** إلى **{expected_max:g}**. "
@@ -1511,8 +1794,45 @@ for col in selected_columns:
 if out_of_range:
     st.warning(
         "توجد قيم خارج النطاق المتوقع: "
-        + "، ".join([f"{col}: {count}" for col, count in out_of_range.items()])
+        + "، ".join([
+            f"{header_aliases.get(col, col)}: {count}"
+            for col, count in out_of_range.items()
+        ])
     )
+    range_policy = st.radio(
+        "كيف تريد التعامل مع القيم خارج النطاق؟",
+        ["استبعادها من الحسابات واعتبارها قيمًا مفقودة", "إيقاف التحليل لتصحيح الملف"],
+        horizontal=True,
+        help="لا تسمح المنصة بإبقاء القيم المخالفة داخل المتوسط أو الرضا أو الثبات.",
+    )
+    if range_policy.startswith("إيقاف"):
+        st.error("تم إيقاف التحليل حتى تُصحّح القيم خارج المقياس في الملف.")
+        st.stop()
+
+    analysis_df, excluded_by_column = exclude_out_of_range_values(
+        analysis_df,
+        selected_columns,
+        expected_min,
+        expected_max,
+    )
+    excluded_out_of_range = sum(excluded_by_column.values())
+
+    st.info(
+        f"استبعدت المنصة **{excluded_out_of_range:,} قيمة** مخالفة من جميع الحسابات الإحصائية.",
+        icon="🧹",
+    )
+else:
+    excluded_out_of_range = 0
+
+if int(analysis_df.notna().sum().sum()) == 0:
+    st.error("لا توجد قيم صالحة داخل نطاق المقياس المختار.")
+    st.stop()
+
+# التقرير والحسابات اللاحقة يستخدمان النسخة المنظفة فقط.
+quality_df = build_quality(analysis_df, selected_columns, suspicious_columns)
+quality_df["العمود"] = quality_df["العمود"].map(
+    lambda value: header_aliases.get(value, value)
+)
 
 
 # ============================================================
@@ -1521,6 +1841,9 @@ if out_of_range:
 st.subheader("التحليل الوصفي")
 
 descriptive_df = build_descriptive(analysis_df, selected_columns)
+descriptive_df["السؤال"] = descriptive_df["السؤال"].map(
+    lambda value: header_aliases.get(value, value)
+)
 st.dataframe(descriptive_df, use_container_width=True)
 
 
@@ -1565,16 +1888,22 @@ if len(selected_columns) < 2:
     st.info("اختر سؤالين على الأقل لحساب Cronbach's Alpha.")
 else:
     try:
+        complete_rows = int(analysis_df.dropna(axis=0, how="any").shape[0])
+        complete_rows_pct = complete_rows / max(len(analysis_df), 1) * 100
         alpha_value = cronbach_alpha(analysis_df)
         alpha_status = classify_alpha(alpha_value)
 
-        a1, a2, a3 = st.columns(3)
+        a1, a2, a3, a4 = st.columns(4)
         a1.metric("Cronbach's Alpha", f"{alpha_value:.4f}")
         a2.metric("التصنيف", alpha_status)
-        a3.metric(
-            "عدد الصفوف المكتملة",
-            int(analysis_df.dropna(axis=0, how="any").shape[0]),
-        )
+        a3.metric("الصفوف المستخدمة", f"{complete_rows:,}")
+        a4.metric("نسبة العينة المستخدمة", f"{complete_rows_pct:.1f}%")
+
+        if complete_rows_pct < 80:
+            st.warning(
+                "حُسب Alpha باستخدام الصفوف المكتملة فقط، وتم استبعاد أكثر من 20% من السجلات. "
+                "قد تتأثر النتيجة بالقيم المفقودة؛ راجع نمط الفقد قبل اعتمادها."
+            )
 
         if suspicious_columns:
             st.info(
@@ -1587,6 +1916,11 @@ else:
                 "قيمة Alpha خارج النطاق المعتاد 0–1. "
                 "قد يكون السبب بنودًا معكوسة غير مصححة أو مشكلة في بنية البيانات."
             )
+
+        st.caption(
+            "ملاحظة منهجية: البنود العكسية يجب إعادة ترميزها قبل حساب Alpha؛ "
+            "المنصة لا تفترض تلقائيًا أي بند عكسي."
+        )
 
     except Exception:
         st.error(
@@ -1601,6 +1935,9 @@ else:
 st.subheader("توزيع الإجابات")
 
 frequency_df = build_frequency(analysis_df, selected_columns)
+frequency_df["السؤال"] = frequency_df["السؤال"].map(
+    lambda value: header_aliases.get(value, value)
+)
 st.dataframe(frequency_df, use_container_width=True)
 
 
@@ -1609,18 +1946,15 @@ st.dataframe(frequency_df, use_container_width=True)
 # ============================================================
 st.subheader("ملخص التحليل")
 
-overall_mean = float(
-    pd.concat(
-        [analysis_df[c] for c in selected_columns],
-        ignore_index=True,
-    ).mean()
-)
+# وزن متساوٍ لكل بند؛ لا يحصل السؤال ذو الاستجابات الأكثر على وزن أعلى.
+overall_mean = equal_weight_item_mean(descriptive_df)
 
 overall_satisfaction = (
     ((overall_mean - expected_min) / (expected_max - expected_min) * 100)
     if expected_max > expected_min
     else np.nan
 )
+overall_satisfaction = float(np.clip(overall_satisfaction, 0, 100))
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("عدد السجلات", f"{len(analysis_df):,}")
@@ -1743,25 +2077,31 @@ summary_df = pd.DataFrame([{
     "ثقة اكتشاف النوع": detection_confidence,
     "عدد السجلات": len(raw_df),
     "عدد الأسئلة المختارة": len(selected_columns),
-    "الأعمدة المشبوهة": ", ".join(suspicious_columns),
+    "الأعمدة المشبوهة": ", ".join(
+        header_aliases.get(col, col) for col in suspicious_columns
+    ),
+    "القيم المستبعدة خارج النطاق": excluded_out_of_range,
     "Cronbach Alpha": alpha_value,
     "تصنيف Alpha": alpha_status,
     "النطاق المتوقع": f"{expected_min} - {expected_max}",
     "المتوسط العام": overall_mean,
     "مؤشر الرضا العام %": overall_satisfaction,
+    "منهج المتوسط العام": "متوسط متساوي الأوزان لمتوسطات البنود",
 }])
 
 output = io.BytesIO()
+analysis_report_df = rename_columns_for_display(analysis_df, header_aliases)
 
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
     safe_to_excel(summary_df, writer, "Summary")
     safe_to_excel(descriptive_df, writer, "Descriptive")
     safe_to_excel(quality_df, writer, "Data Quality")
     safe_to_excel(frequency_df, writer, "Frequencies")
-    safe_to_excel(analysis_df, writer, "Selected Data")
+    safe_to_excel(analysis_report_df, writer, "Selected Data")
 
     if not satisfaction_df.empty:
         safe_to_excel(satisfaction_df, writer, "Satisfaction")
+    safe_to_excel(header_mapping_df, writer, "Column Mapping")
 
 output.seek(0)
 
@@ -1773,7 +2113,8 @@ show_report_preview({
     "جودة البيانات": quality_df,
     "مؤشر الرضا": satisfaction_df,
     "التكرارات": frequency_df,
-    "البيانات المختارة": analysis_df,
+    "البيانات المختارة": analysis_report_df,
+    "خريطة الأعمدة": header_mapping_df,
 })
 
 st.download_button(
@@ -1785,6 +2126,6 @@ st.download_button(
 
 st.success("اكتمل التحليل وأصبح التقرير جاهزًا للتنزيل.", icon="✅")
 st.markdown(
-    '<div class="footer">منصة تحليلات الجودة التعليمية · تحليل البيانات لاتخاذ قرارات قابلة للقياس</div>',
+    '<div class="footer">منصة تحليلات الجودة التعليمية · تحليل البيانات لاتخاذ قرارات قابلة للقياس<br><strong>تطوير المهندس أحمد المالكي</strong></div>',
     unsafe_allow_html=True,
 )

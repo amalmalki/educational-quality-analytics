@@ -39,14 +39,19 @@ st.markdown(
     """
     <style>
     :root {
-        --primary: #136f63;
-        --primary-dark: #0b4f47;
-        --secondary: #d9a441;
-        --ink: #16302d;
-        --muted: #627773;
+        --primary: #79b99a;
+        --primary-strong: #4f9274;
+        --primary-dark: #235c48;
+        --primary-soft: #e8f5ed;
+        --secondary: #c9a24b;
+        --secondary-dark: #8a691f;
+        --secondary-soft: #fff7e3;
+        --ink: #173d31;
+        --muted: #5d746b;
         --surface: #ffffff;
-        --soft: #f2f8f6;
-        --line: #dce9e6;
+        --soft: #f4faf6;
+        --line: #d8e8de;
+        --shadow: 0 12px 32px rgba(35,92,72,.08);
     }
 
     html, body, [class*="css"], [data-testid="stAppViewContainer"] {
@@ -55,43 +60,79 @@ st.markdown(
     [data-testid="stAppViewContainer"] {
         direction: rtl;
         background:
-          radial-gradient(circle at 12% 8%, rgba(217,164,65,.10), transparent 24rem),
-          linear-gradient(180deg, #f7fbfa 0%, #ffffff 35%);
+          radial-gradient(circle at 8% 4%, rgba(201,162,75,.14), transparent 25rem),
+          radial-gradient(circle at 92% 18%, rgba(121,185,154,.16), transparent 28rem),
+          linear-gradient(180deg, #f5fbf7 0%, #ffffff 42%, #fbfdfb 100%);
         color: var(--ink);
     }
-    [data-testid="stMainBlockContainer"] {max-width: 1320px; padding-top: 1.5rem;}
-    [data-testid="stSidebar"] {direction: rtl; border-left: 1px solid var(--line);}
-    [data-testid="stSidebar"] > div {background: #f7fbfa;}
+    [data-testid="stMainBlockContainer"] {max-width: 1320px; padding-top: 1.6rem; padding-bottom:2rem;}
+    [data-testid="stSidebar"] {direction: rtl; border-left: 1px solid #cfdfd5;}
+    [data-testid="stSidebar"] > div {
+        background:linear-gradient(180deg,#edf7f1 0%,#fffaf0 100%);
+    }
     h1, h2, h3 {color: var(--ink); letter-spacing: -.02em;}
-    h2 {border-right: 4px solid var(--secondary); padding-right: .7rem; margin-top: 2rem;}
+    h2 {
+        position:relative; border-right:5px solid var(--secondary); padding:.15rem .8rem .2rem 0;
+        margin-top:2.15rem; font-weight:850;
+    }
+    h2:after {
+        content:""; display:block; width:54px; height:3px; border-radius:99px;
+        background:var(--primary); margin-top:.5rem;
+    }
 
     .hero {
-        position: relative; overflow: hidden; color: white;
-        background: linear-gradient(125deg, #0b4f47 0%, #136f63 58%, #238c7d 100%);
-        border-radius: 26px; padding: 2.35rem 2.5rem; margin-bottom: 1.35rem;
-        box-shadow: 0 18px 45px rgba(11,79,71,.18);
+        position:relative; isolation:isolate; overflow:hidden; color:var(--ink);
+        background:linear-gradient(125deg,#f2fbf6 0%,#cfeada 46%,#8dc5a8 100%);
+        border:1px solid rgba(79,146,116,.25); border-radius:28px;
+        padding:2.55rem 2.65rem; margin-bottom:1.45rem;
+        box-shadow:0 20px 50px rgba(35,92,72,.14);
+    }
+    .hero:before {
+        content:""; position:absolute; inset:0 auto 0 0; width:10px;
+        background:linear-gradient(180deg,var(--secondary),#e4c779); z-index:-1;
     }
     .hero:after {
-        content:""; position:absolute; width:260px; height:260px; left:-65px; top:-105px;
-        border: 42px solid rgba(255,255,255,.07); border-radius:50%;
+        content:""; position:absolute; width:300px; height:300px; left:-85px; top:-125px;
+        border:48px solid rgba(255,255,255,.3); border-radius:50%; z-index:-1;
     }
-    .hero-kicker {font-size:.88rem; font-weight:700; color:#ffe6ac; margin-bottom:.55rem;}
-    .hero h1 {color:white; margin:0 0 .55rem; font-size:clamp(2rem,4vw,3.25rem); line-height:1.15;}
-    .hero p {margin:0; color:#e5f4f1; font-size:1.08rem; max-width:760px;}
+    .hero-kicker {
+        display:inline-flex; align-items:center; gap:.4rem; font-size:.78rem; font-weight:850;
+        letter-spacing:.08em; color:var(--secondary-dark); background:rgba(255,247,227,.85);
+        border:1px solid rgba(201,162,75,.45); padding:.35rem .7rem; border-radius:99px;
+        margin-bottom:.8rem;
+    }
+    .hero h1 {color:#174c3a; margin:0 0 .65rem; font-size:clamp(2rem,4vw,3.2rem); line-height:1.16; font-weight:900;}
+    .hero p {margin:0; color:#315f50; font-size:1.08rem; max-width:790px; line-height:1.85;}
     .hero-badges {display:flex; gap:.55rem; flex-wrap:wrap; margin-top:1.2rem;}
-    .hero-badge {background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.2); padding:.38rem .75rem; border-radius:99px; font-size:.82rem;}
+    .hero-badge {
+        background:rgba(255,255,255,.72); color:#245b48; border:1px solid rgba(79,146,116,.27);
+        padding:.42rem .78rem; border-radius:99px; font-size:.82rem; font-weight:750;
+        box-shadow:0 4px 12px rgba(35,92,72,.05);
+    }
 
-    .feature-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; margin:.8rem 0 1.2rem;}
-    .feature-card {background:white; border:1px solid var(--line); border-radius:17px; padding:1rem 1.1rem; box-shadow:0 6px 20px rgba(22,48,45,.04);}
-    .feature-card b {display:block; color:var(--primary-dark); margin-bottom:.2rem;}
-    .feature-card span {font-size:.87rem; color:var(--muted);}
+    .feature-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin:.9rem 0 1.4rem;}
+    .feature-card {
+        position:relative; overflow:hidden; background:rgba(255,255,255,.92);
+        border:1px solid var(--line); border-radius:19px; padding:1.15rem 1.2rem;
+        box-shadow:var(--shadow); transition:transform .2s ease,box-shadow .2s ease;
+    }
+    .feature-card:before {content:""; position:absolute; top:0; right:0; width:100%; height:4px; background:linear-gradient(90deg,var(--primary),var(--secondary));}
+    .feature-card:hover {transform:translateY(-3px); box-shadow:0 16px 34px rgba(35,92,72,.12);}
+    .feature-card b {display:block; color:var(--primary-dark); margin-bottom:.3rem; font-size:.98rem;}
+    .feature-card span {font-size:.87rem; color:var(--muted); line-height:1.7;}
 
-    [data-testid="stFileUploader"] {background:white; border:1px dashed #7bb9ae; border-radius:20px; padding:1rem; box-shadow:0 8px 28px rgba(19,111,99,.07);}
-    [data-testid="stFileUploaderDropzone"] {background:var(--soft); border-radius:14px; min-height:135px;}
-    [data-testid="stMetric"] {background:white; border:1px solid var(--line); border-radius:16px; padding:1rem; box-shadow:0 5px 18px rgba(22,48,45,.04);}
-    [data-testid="stMetricValue"] {color:var(--primary-dark); font-weight:800;}
+    [data-testid="stFileUploader"] {background:white; border:1px dashed var(--primary-strong); border-radius:22px; padding:1rem; box-shadow:var(--shadow);}
+    [data-testid="stFileUploaderDropzone"] {background:linear-gradient(135deg,var(--soft),var(--secondary-soft)); border-radius:16px; min-height:140px;}
+    [data-testid="stMetric"] {
+        position:relative; overflow:hidden; min-height:118px; display:flex; justify-content:center;
+        background:linear-gradient(145deg,#ffffff 0%,#f4faf6 100%);
+        border:1px solid var(--line); border-radius:19px; padding:1.1rem;
+        box-shadow:var(--shadow);
+    }
+    [data-testid="stMetric"]:before {content:""; position:absolute; top:0; right:0; width:100%; height:4px; background:linear-gradient(90deg,var(--primary),var(--secondary));}
+    [data-testid="stMetricValue"] {color:var(--primary-dark); font-weight:900; font-size:2rem;}
     [data-testid="stMetricLabel"] {
-        color: #526965 !important;
+        color: #4f6c61 !important;
         font-size: .92rem !important;
         font-weight: 700 !important;
         opacity: 1 !important;
@@ -101,28 +142,46 @@ st.markdown(
     }
     [data-testid="stMetricLabel"] p,
     [data-testid="stMetricLabel"] div {
-        color: #526965 !important;
+        color: #4f6c61 !important;
         opacity: 1 !important;
     }
     [data-testid="stMetricValue"] > div {
         justify-content: center !important;
         text-align: center !important;
     }
-    [data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:14px; overflow:hidden;}
-    [data-testid="stExpander"] {background:white; border:1px solid var(--line); border-radius:15px;}
+    [data-testid="stDataFrame"] {background:white; border:1px solid var(--line); border-radius:17px; overflow:hidden; box-shadow:0 8px 24px rgba(35,92,72,.06);}
+    [data-testid="stExpander"] {background:rgba(255,255,255,.92); border:1px solid var(--line); border-radius:17px; box-shadow:0 7px 20px rgba(35,92,72,.05);}
+    [data-testid="stAlert"] {border-radius:16px; border-width:1px; box-shadow:0 6px 18px rgba(35,92,72,.05);}
+    [data-testid="stVegaLiteChart"] {background:white; border:1px solid var(--line); border-radius:18px; padding:1rem; box-shadow:var(--shadow);}
+    [data-baseweb="tab-list"] {gap:.45rem; background:var(--primary-soft); padding:.35rem; border-radius:14px;}
+    [data-baseweb="tab"] {border-radius:10px; color:var(--primary-dark); font-weight:750; padding:.55rem .9rem;}
+    [aria-selected="true"][data-baseweb="tab"] {background:white; box-shadow:0 4px 12px rgba(35,92,72,.09);}
+    [data-testid="stVerticalBlockBorderWrapper"] {border-color:var(--line) !important; border-radius:22px !important; background:rgba(255,255,255,.72); box-shadow:var(--shadow);}
     .stButton > button, .stDownloadButton > button {
-        border-radius:12px; min-height:2.8rem; font-weight:700; border:1px solid var(--primary);
+        border-radius:13px; min-height:2.9rem; font-weight:800; border:1px solid var(--primary-strong); transition:all .18s ease;
     }
-    .stDownloadButton > button {background:var(--primary); color:white; width:100%;}
-    .stDownloadButton > button:hover {background:var(--primary-dark); color:white; border-color:var(--primary-dark);}
-    .privacy-note {background:#fffaf0; border:1px solid #f0d69b; color:#6f5317; border-radius:13px; padding:.75rem .9rem; font-size:.85rem; margin:.7rem 0 1rem;}
+    .stButton > button:hover {border-color:var(--secondary); color:var(--primary-dark); transform:translateY(-1px);}
+    .stDownloadButton > button {background:linear-gradient(110deg,var(--primary-strong),var(--primary-dark)); color:white; width:100%; box-shadow:0 8px 20px rgba(35,92,72,.18);}
+    .stDownloadButton > button:hover {background:linear-gradient(110deg,var(--primary-dark),#174635); color:white; border-color:var(--secondary);}
+    .privacy-note {background:var(--secondary-soft); border:1px solid #ead49c; color:#70561f; border-radius:15px; padding:.82rem 1rem; font-size:.86rem; margin:.8rem 0 1rem;}
     .step {display:flex; gap:.65rem; align-items:flex-start; margin:.7rem 0; color:var(--muted); font-size:.88rem;}
-    .step-num {min-width:25px; height:25px; display:grid; place-items:center; border-radius:50%; background:#dcefeb; color:var(--primary-dark); font-weight:800;}
-    .footer {text-align:center; color:var(--muted); font-size:.8rem; padding:2.5rem 0 1rem;}
+    .step-num {min-width:27px; height:27px; display:grid; place-items:center; border-radius:50%; background:linear-gradient(135deg,var(--primary),#b9ddca); color:#174b39; border:1px solid rgba(35,92,72,.12); font-weight:900;}
+    .analytics-kicker {display:inline-flex; color:var(--secondary-dark); background:var(--secondary-soft); border:1px solid #ead49c; border-radius:99px; padding:.32rem .7rem; font-size:.78rem; font-weight:800; margin-bottom:.65rem;}
+    .analytics-note {color:var(--muted); font-size:.86rem; margin:-.15rem 0 .9rem;}
+    .donut-card {position:relative; overflow:hidden; min-height:245px; background:linear-gradient(150deg,#fff 0%,#f5faf7 100%); border:1px solid var(--line); border-radius:21px; padding:20px 14px; text-align:center; box-shadow:var(--shadow);}
+    .donut-card:before {content:""; position:absolute; top:0; right:0; width:100%; height:4px; background:linear-gradient(90deg,var(--primary),var(--secondary));}
+    .donut-ring {width:138px; height:138px; margin:3px auto 14px; border-radius:50%; display:grid; place-items:center; filter:drop-shadow(0 7px 12px rgba(35,92,72,.12));}
+    .donut-core {width:98px; height:98px; border-radius:50%; background:#fff; display:grid; place-items:center; color:var(--primary-dark); font-size:1.42rem; font-weight:900; box-shadow:inset 0 0 0 1px #edf4ef;}
+    .donut-label {font-weight:900; color:var(--ink); font-size:1rem;}
+    .donut-note {font-size:.79rem; color:var(--muted); margin-top:5px;}
+    .footer {text-align:center; color:var(--muted); font-size:.82rem; padding:2.6rem 0 1rem; border-top:1px solid var(--line); margin-top:2rem;}
+    .footer strong {color:var(--primary-dark);}
     @media (max-width: 760px) {
         [data-testid="stMainBlockContainer"] {padding:1rem .75rem;}
         .hero {padding:1.6rem 1.25rem; border-radius:19px;}
         .feature-grid {grid-template-columns:1fr;}
+        [data-testid="stMetric"] {min-height:105px;}
+        .donut-card {min-height:225px; margin-bottom:.6rem;}
     }
     </style>
     """,
@@ -1325,18 +1384,13 @@ def donut_metric(label: str, value: float, color: str = "#136f63", note: str = "
     safe_value = 0.0 if pd.isna(value) else float(np.clip(value, 0, 100))
     st.markdown(
         f"""
-        <div style="background:#fff;border:1px solid #dce9e6;border-radius:18px;
-                    padding:18px 12px;text-align:center;box-shadow:0 5px 18px rgba(22,48,45,.05)">
-          <div style="width:132px;height:132px;margin:0 auto 12px;border-radius:50%;
-                      background:conic-gradient({color} 0 {safe_value:.2f}%,#e8f0ee {safe_value:.2f}% 100%);
-                      display:grid;place-items:center">
-            <div style="width:94px;height:94px;border-radius:50%;background:white;
-                        display:grid;place-items:center;color:#0b4f47;font-size:1.35rem;font-weight:800">
-              {safe_value:.1f}%
-            </div>
+        <div class="donut-card">
+          <div class="donut-ring"
+               style="background:conic-gradient({color} 0 {safe_value:.2f}%,#e4eee8 {safe_value:.2f}% 100%)">
+            <div class="donut-core">{safe_value:.1f}%</div>
           </div>
-          <div style="font-weight:800;color:#16302d">{label}</div>
-          <div style="font-size:.78rem;color:#627773;margin-top:4px">{note}</div>
+          <div class="donut-label">{label}</div>
+          <div class="donut-note">{note}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1966,53 +2020,67 @@ m4.metric("الرضا العام", f"{overall_satisfaction:.1f}%")
 # لوحة الإحصاءات المرئية
 # ============================================================
 st.subheader("لوحة الإحصاءات المرئية")
+st.markdown(
+    '<span class="analytics-kicker">EXECUTIVE ANALYTICS</span>'
+    '<div class="analytics-note">قراءة بصرية مركزة لأهم مؤشرات الجودة والاتساق وتوزيع الإجابات.</div>',
+    unsafe_allow_html=True,
+)
 
 total_cells = analysis_df.shape[0] * analysis_df.shape[1]
 available_cells = int(analysis_df.notna().sum().sum())
 completeness_pct = (available_cells / total_cells * 100) if total_cells else 0
 alpha_pct = float(np.clip(alpha_value * 100, 0, 100)) if alpha_value is not None else 0
 
-circle1, circle2, circle3 = st.columns(3)
-with circle1:
-    donut_metric("الرضا العام", overall_satisfaction, "#136f63", "محسوب وفق نطاق المقياس")
-with circle2:
-    donut_metric("اكتمال البيانات", completeness_pct, "#d9a441", "نسبة القيم غير المفقودة")
-with circle3:
-    donut_metric(
-        "الثبات الداخلي",
-        alpha_pct,
-        "#2878a5",
-        alpha_status if alpha_status else "غير متاح",
-    )
-
-visual_tab1, visual_tab2 = st.tabs(["أعمدة مؤشرات البنود", "أعمدة توزيع الإجابات"])
-
-with visual_tab1:
-    if not satisfaction_df.empty:
-        visual_satisfaction = (
-            satisfaction_df
-            .sort_values("مؤشر الرضا %", ascending=False)
-            .head(20)
-            .set_index("السؤال")[["مؤشر الرضا %"]]
+with st.container(border=True):
+    circle1, circle2, circle3 = st.columns(3, gap="medium")
+    with circle1:
+        donut_metric("الرضا العام", overall_satisfaction, "#72b493", "محسوب وفق نطاق المقياس")
+    with circle2:
+        donut_metric("اكتمال البيانات", completeness_pct, "#c9a24b", "نسبة القيم غير المفقودة")
+    with circle3:
+        donut_metric(
+            "الثبات الداخلي",
+            alpha_pct,
+            "#4f9274",
+            alpha_status if alpha_status else "غير متاح",
         )
-        st.bar_chart(visual_satisfaction, color="#136f63")
-    else:
-        st.info("لا تتوفر بيانات كافية لرسم مؤشرات البنود.")
 
-with visual_tab2:
-    combined_answers = (
-        pd.concat([analysis_df[c] for c in selected_columns], ignore_index=True)
-        .dropna()
-        .value_counts()
-        .sort_index()
-        .rename_axis("قيمة الإجابة")
-        .to_frame("التكرار")
-    )
-    if not combined_answers.empty:
-        st.bar_chart(combined_answers, color="#d9a441")
-        st.caption("يجمع الرسم جميع إجابات البنود المختارة لإظهار شكل التوزيع العام.")
-    else:
-        st.info("لا تتوفر إجابات كافية لرسم التوزيع.")
+    st.markdown("<div style='height:.35rem'></div>", unsafe_allow_html=True)
+    visual_tab1, visual_tab2 = st.tabs(["مؤشرات الرضا حسب البند", "التوزيع العام للإجابات"])
+
+    with visual_tab1:
+        if not satisfaction_df.empty:
+            visual_satisfaction = (
+                satisfaction_df
+                .nlargest(20, "مؤشر الرضا %")
+                .sort_values("مؤشر الرضا %", ascending=True)
+                .set_index("السؤال")[["مؤشر الرضا %"]]
+            )
+            chart_height = max(360, min(760, 42 * len(visual_satisfaction)))
+            st.caption("مؤشر الرضا لكل بند — تعرض اللوحة 20 بندًا كحد أقصى لتبقى العناوين مقروءة.")
+            st.bar_chart(
+                visual_satisfaction,
+                color="#72b493",
+                horizontal=True,
+                height=chart_height,
+            )
+        else:
+            st.info("لا تتوفر بيانات كافية لرسم مؤشرات البنود.")
+
+    with visual_tab2:
+        combined_answers = (
+            pd.concat([analysis_df[c] for c in selected_columns], ignore_index=True)
+            .dropna()
+            .value_counts()
+            .sort_index()
+            .rename_axis("قيمة الإجابة")
+            .to_frame("التكرار")
+        )
+        if not combined_answers.empty:
+            st.caption("تجميع إجابات البنود المختارة لإظهار شكل التوزيع العام على المقياس.")
+            st.bar_chart(combined_answers, color="#c9a24b", height=410)
+        else:
+            st.info("لا تتوفر إجابات كافية لرسم التوزيع.")
 
 # ============================================================
 # الاستجابة التفسيرية للمنصة
@@ -2047,8 +2115,9 @@ if out_of_range:
         "ينبغي مراجعتها قبل اعتماد التقرير."
     )
 
-for message in response_messages:
-    st.markdown(f"- {message}")
+with st.container(border=True):
+    for message in response_messages:
+        st.info(message, icon="📌")
 
 if not satisfaction_df.empty:
     best_item = satisfaction_df.loc[satisfaction_df["مؤشر الرضا %"].idxmax()]

@@ -2,6 +2,8 @@ import io
 import json
 import re
 import csv
+import zipfile
+import hmac
 from pathlib import Path
 
 import numpy as np
@@ -152,7 +154,7 @@ with st.sidebar:
 # ثوابت عامة
 # ============================================================
 SUPPORTED_EXTENSIONS = [
-    "xlsx", "xls", "xlsm",
+    "xlsx", "xls",
     "csv", "tsv",
     "ods",
     "pdf",
@@ -163,6 +165,17 @@ SUPPORTED_EXTENSIONS = [
     "parquet",
     "html", "htm",
 ]
+
+# حدود تشغيل محافظة للنسخة التجريبية العامة. يمكن رفعها لاحقًا بعد اختبارات أداء.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_ROWS = 100_000
+MAX_COLUMNS = 500
+MAX_EXCEL_SHEETS = 30
+MAX_PDF_PAGES = 200
+MAX_EXTRACTED_TABLES = 100
+MAX_ZIP_ENTRIES = 2_000
+MAX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 100
 
 LIKERT_TOKENS = [
     "strongly agree", "agree", "neutral", "disagree", "strongly disagree",
@@ -201,6 +214,131 @@ def normalize_text(value) -> str:
     text = str(value).strip().lower()
     text = re.sub(r"\s+", " ", text)
     return text
+
+
+def user_safe_error(context: str):
+    """رسالة عامة لا تكشف مسارات الخادم أو تفاصيل المكتبات."""
+    st.error(
+        f"تعذر {context}. تحقق من سلامة الملف وبنيته ثم أعد المحاولة. "
+        "إذا استمرت المشكلة فاستخدم ملفًا أصغر أو حوّله إلى CSV/XLSX منظم."
+    )
+
+
+def require_optional_access_code():
+    """
+    بوابة بسيطة للنسخة التجريبية عند ضبط APP_PASSWORD في Streamlit Secrets.
+    ليست بديلًا عن نظام هوية وصلاحيات للنسخة التجارية.
+    """
+    try:
+        configured_password = st.secrets.get("APP_PASSWORD")
+    except Exception:
+        configured_password = None
+
+    if not configured_password:
+        st.warning(
+            "وضع تجريبي عام: لم يتم تفعيل رمز دخول. استخدم بيانات اصطناعية أو منزوعة الهوية فقط.",
+            icon="⚠️",
+        )
+        return
+
+    if st.session_state.get("access_granted"):
+        return
+
+    st.subheader("الدخول إلى النسخة التجريبية")
+    entered = st.text_input("رمز الدخول", type="password")
+    if st.button("دخول", type="primary", use_container_width=True):
+        if hmac.compare_digest(str(entered), str(configured_password)):
+            st.session_state["access_granted"] = True
+            st.rerun()
+        else:
+            st.error("رمز الدخول غير صحيح.")
+    st.stop()
+
+
+def validate_zip_container(raw_bytes: bytes, extension: str):
+    """تقليل مخاطر ZIP bombs والماكرو داخل صيغ Office المضغوطة."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+            infos = archive.infolist()
+            if len(infos) > MAX_ZIP_ENTRIES:
+                raise ValueError("يحتوي الملف على عدد مفرط من المكونات الداخلية.")
+
+            total_uncompressed = sum(item.file_size for item in infos)
+            total_compressed = sum(max(item.compress_size, 1) for item in infos)
+            ratio = total_uncompressed / max(total_compressed, 1)
+
+            if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("الحجم بعد فك الضغط يتجاوز الحد الآمن.")
+            if ratio > MAX_COMPRESSION_RATIO:
+                raise ValueError("نسبة الضغط غير طبيعية.")
+
+            names = {item.filename.lower() for item in infos}
+            if any(name.endswith("vbaproject.bin") for name in names):
+                raise ValueError("الملفات التي تحتوي وحدات ماكرو غير مسموحة.")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("بنية الملف المضغوط غير صالحة.") from exc
+
+
+def validate_uploaded_file(uploaded_file) -> tuple[str, bytes]:
+    """التحقق من الحجم والامتداد والبصمة الأولية قبل تمرير الملف إلى القارئ."""
+    extension = Path(uploaded_file.name).suffix.lower().lstrip(".")
+    if extension not in SUPPORTED_EXTENSIONS:
+        raise ValueError("نوع الملف غير مسموح.")
+
+    uploaded_file.seek(0)
+    raw = uploaded_file.read()
+    uploaded_file.seek(0)
+
+    if not raw:
+        raise ValueError("الملف فارغ.")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise ValueError("حجم الملف يتجاوز 25 ميجابايت.")
+
+    signatures = {
+        "pdf": lambda b: b.startswith(b"%PDF-"),
+        "parquet": lambda b: len(b) >= 8 and b[:4] == b"PAR1" and b[-4:] == b"PAR1",
+        "xls": lambda b: b.startswith(bytes.fromhex("D0CF11E0A1B11AE1")),
+        "xlsx": lambda b: b.startswith(b"PK\x03\x04"),
+        "docx": lambda b: b.startswith(b"PK\x03\x04"),
+        "ods": lambda b: b.startswith(b"PK\x03\x04"),
+    }
+    check = signatures.get(extension)
+    if check and not check(raw):
+        raise ValueError("محتوى الملف لا يطابق امتداده.")
+
+    if extension in {"xlsx", "docx", "ods"}:
+        validate_zip_container(raw, extension)
+
+    return extension, raw
+
+
+def enforce_dataframe_limits(df: pd.DataFrame) -> pd.DataFrame:
+    if len(df) > MAX_ROWS:
+        raise ValueError(f"عدد الصفوف يتجاوز الحد المسموح ({MAX_ROWS:,}).")
+    if len(df.columns) > MAX_COLUMNS:
+        raise ValueError(f"عدد الأعمدة يتجاوز الحد المسموح ({MAX_COLUMNS:,}).")
+    return df
+
+
+def sanitize_excel_value(value):
+    """منع تحول نصوص المستخدم إلى صيغ نشطة عند فتح تقرير Excel."""
+    if isinstance(value, str):
+        stripped = value.lstrip()
+        if stripped.startswith(("=", "+", "-", "@")):
+            return "'" + value
+    return value
+
+
+def sanitize_dataframe_for_excel(df: pd.DataFrame) -> pd.DataFrame:
+    safe = df.copy()
+    for column in safe.select_dtypes(include=["object", "string"]).columns:
+        safe[column] = safe[column].map(sanitize_excel_value)
+    safe.columns = [sanitize_excel_value(str(column)) for column in safe.columns]
+    return safe
+
+
+def safe_to_excel(df: pd.DataFrame, writer, sheet_name: str):
+    sanitize_dataframe_for_excel(df).to_excel(writer, sheet_name=sheet_name, index=False)
 
 
 def clean_numeric_series(series: pd.Series) -> pd.Series:
@@ -252,7 +390,7 @@ def tidy_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if drop_cols:
         df = df.drop(columns=drop_cols)
 
-    return df.reset_index(drop=True)
+    return enforce_dataframe_limits(df.reset_index(drop=True))
 
 
 def try_promote_first_row_to_header(df: pd.DataFrame) -> pd.DataFrame:
@@ -320,14 +458,6 @@ def looks_like_identifier(column_name: str, series: pd.Series) -> bool:
         return name_suspicious
 
     unique_ratio = numeric.nunique() / max(len(numeric), 1)
-    sequential = False
-
-    if len(numeric) >= 3:
-        values = np.sort(numeric.unique())
-        if len(values) >= 3:
-            diffs = np.diff(values)
-            sequential = np.allclose(diffs, 1)
-
     # لا نعتبر العمود معرفًا فقط لأنه فريد إذا كانت قيمه تبدو كمقياس قصير.
     looks_like_small_scale = (
         numeric.nunique() <= 10
@@ -335,7 +465,9 @@ def looks_like_identifier(column_name: str, series: pd.Series) -> bool:
         and numeric.max() <= 10
     )
 
-    return name_suspicious or (unique_ratio >= 0.95 and not looks_like_small_scale) or sequential
+    # التسلسل 1،2،3،4،5 وحده ليس دليلًا على أن العمود ID؛ فقد يكون سؤال Likert.
+    # نعتمد الاسم الدال على المعرّف، أو التفرد العالي خارج نطاق المقاييس القصيرة.
+    return name_suspicious or (unique_ratio >= 0.95 and not looks_like_small_scale)
 
 
 def is_likert_column_name(column_name: str) -> bool:
@@ -383,6 +515,9 @@ def read_excel_like(uploaded_file, extension: str):
         excel = pd.ExcelFile(uploaded_file, engine="xlrd")
     else:
         excel = pd.ExcelFile(uploaded_file)
+
+    if len(excel.sheet_names) > MAX_EXCEL_SHEETS:
+        raise ValueError(f"عدد أوراق العمل يتجاوز الحد المسموح ({MAX_EXCEL_SHEETS}).")
 
     candidates = {}
     for sheet in excel.sheet_names:
@@ -453,7 +588,11 @@ def read_json_file(uploaded_file):
 
 def read_xml_file(uploaded_file):
     uploaded_file.seek(0)
-    df = pd.read_xml(uploaded_file)
+    raw = uploaded_file.read()
+    lowered = raw.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise ValueError("ملفات XML التي تحتوي DOCTYPE أو ENTITY غير مسموحة.")
+    df = pd.read_xml(io.BytesIO(raw))
     df = tidy_dataframe(df)
     return {"XML data": df}, None
 
@@ -472,6 +611,8 @@ def read_html_file(uploaded_file):
     html = raw.decode(encoding, errors="replace")
 
     tables = pd.read_html(io.StringIO(html))
+    if len(tables) > MAX_EXTRACTED_TABLES:
+        raise ValueError("عدد جداول HTML يتجاوز الحد المسموح.")
     candidates = {}
 
     for i, table in enumerate(tables, start=1):
@@ -495,6 +636,9 @@ def read_docx_file(uploaded_file):
     candidates = {}
 
     # الجداول أولًا
+    if len(doc.tables) > MAX_EXTRACTED_TABLES:
+        raise ValueError("عدد جداول Word يتجاوز الحد المسموح.")
+
     for i, table in enumerate(doc.tables, start=1):
         rows = []
         for row in table.rows:
@@ -539,6 +683,8 @@ def read_pdf_file(uploaded_file):
     table_counter = 0
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        if len(pdf.pages) > MAX_PDF_PAGES:
+            raise ValueError(f"عدد صفحات PDF يتجاوز الحد المسموح ({MAX_PDF_PAGES}).")
         for page_no, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
             if text.strip():
@@ -550,6 +696,8 @@ def read_pdf_file(uploaded_file):
                 tables = []
 
             for table in tables:
+                if table_counter >= MAX_EXTRACTED_TABLES:
+                    raise ValueError("عدد الجداول المستخرجة من PDF يتجاوز الحد المسموح.")
                 if not table or len(table) < 2:
                     continue
 
@@ -630,12 +778,9 @@ def read_txt_file(uploaded_file):
 
 
 def load_file(uploaded_file):
-    extension = Path(uploaded_file.name).suffix.lower().lstrip(".")
+    extension, _ = validate_uploaded_file(uploaded_file)
 
-    if extension not in SUPPORTED_EXTENSIONS:
-        raise ValueError(f"نوع الملف غير مدعوم: .{extension}")
-
-    if extension in {"xlsx", "xls", "xlsm", "ods"}:
+    if extension in {"xlsx", "xls", "ods"}:
         return read_excel_like(uploaded_file, extension), extension
 
     if extension in {"csv", "tsv"}:
@@ -919,22 +1064,22 @@ def prepare_excel_report(
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
+        safe_to_excel(summary_df, writer, "Summary")
 
         if descriptive_df is not None and not descriptive_df.empty:
-            descriptive_df.to_excel(writer, sheet_name="Descriptive", index=False)
+            safe_to_excel(descriptive_df, writer, "Descriptive")
 
         if quality_df is not None and not quality_df.empty:
-            quality_df.to_excel(writer, sheet_name="Data Quality", index=False)
+            safe_to_excel(quality_df, writer, "Data Quality")
 
         if frequency_df is not None and not frequency_df.empty:
-            frequency_df.to_excel(writer, sheet_name="Frequencies", index=False)
+            safe_to_excel(frequency_df, writer, "Frequencies")
 
         if selected_df is not None and not selected_df.empty:
-            selected_df.to_excel(writer, sheet_name="Selected Data", index=False)
+            safe_to_excel(selected_df, writer, "Selected Data")
 
         if source_df is not None and not source_df.empty:
-            source_df.head(50000).to_excel(writer, sheet_name="Source Preview", index=False)
+            safe_to_excel(source_df.head(50000), writer, "Source Preview")
 
     output.seek(0)
     return output
@@ -990,6 +1135,8 @@ def donut_metric(label: str, value: float, color: str = "#136f63", note: str = "
 # ============================================================
 # واجهة رفع الملف
 # ============================================================
+require_optional_access_code()
+
 st.markdown(
     """
     <div class="feature-grid">
@@ -1002,11 +1149,11 @@ st.markdown(
 )
 
 uploaded_file = st.file_uploader(
-    "ابدأ برفع ملف الاستبانة أو نتائجها",
+    "ابدأ برفع ملف الاستبانة أو نتائجها — الحد الآمن 25 MB",
     type=SUPPORTED_EXTENSIONS,
     help=(
-        "مدعوم: Excel, CSV, TSV, ODS, PDF, Word DOCX, TXT, JSON, XML, "
-        "Parquet, HTML."
+        "مدعوم: Excel بدون ماكرو، CSV, TSV, ODS, PDF, Word DOCX, TXT, "
+        "JSON, XML, Parquet, HTML. الحد الأقصى الذي تقبله المنصة 25 MB."
     ),
 )
 
@@ -1050,11 +1197,8 @@ try:
     with st.spinner("جارٍ التحقق من صيغة الملف وقراءة محتواه..."):
         (loaded_result, extension) = load_file(uploaded_file)
         candidates, reader_note = loaded_result
-except Exception as exc:
-    st.error(
-        f"تعذر قراءة الملف: {exc}  \n"
-        "تحقق من أن الملف غير تالف وأن امتداده يطابق محتواه، ثم أعد المحاولة."
-    )
+except Exception:
+    user_safe_error("قراءة الملف")
     st.stop()
 
 if not candidates:
@@ -1222,10 +1366,10 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        summary_df.to_excel(writer, sheet_name="Summary", index=False)
-        converted_df.to_excel(writer, sheet_name="Extracted Data", index=False)
+        safe_to_excel(summary_df, writer, "Summary")
+        safe_to_excel(converted_df, writer, "Extracted Data")
         if not aggregate_summary.empty:
-            aggregate_summary.to_excel(writer, sheet_name="Numeric Summary", index=False)
+            safe_to_excel(aggregate_summary, writer, "Numeric Summary")
 
     output.seek(0)
 
@@ -1283,7 +1427,11 @@ else:
 selected_columns = st.multiselect(
     "اختر أعمدة أسئلة الاستبانة",
     options=numeric_columns,
-    default=auto_question_columns if auto_question_columns else numeric_columns,
+    default=(
+        auto_question_columns
+        if auto_question_columns
+        else [c for c in numeric_columns if c not in auto_identifier_columns]
+    ),
     help="لا تُدخل المعرّفات مثل رقم الطالب أو رقم المشارك ضمن الأسئلة.",
 )
 
@@ -1440,8 +1588,11 @@ else:
                 "قد يكون السبب بنودًا معكوسة غير مصححة أو مشكلة في بنية البيانات."
             )
 
-    except Exception as exc:
-        st.error(f"تعذر حساب Cronbach's Alpha: {exc}")
+    except Exception:
+        st.error(
+            "تعذر حساب معامل الثبات. تحقق من اختيار بندين على الأقل، "
+            "ومن وجود صفوف مكتملة وتباين كافٍ في الإجابات."
+        )
 
 
 # ============================================================
@@ -1603,14 +1754,14 @@ summary_df = pd.DataFrame([{
 output = io.BytesIO()
 
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
-    summary_df.to_excel(writer, sheet_name="Summary", index=False)
-    descriptive_df.to_excel(writer, sheet_name="Descriptive", index=False)
-    quality_df.to_excel(writer, sheet_name="Data Quality", index=False)
-    frequency_df.to_excel(writer, sheet_name="Frequencies", index=False)
-    analysis_df.to_excel(writer, sheet_name="Selected Data", index=False)
+    safe_to_excel(summary_df, writer, "Summary")
+    safe_to_excel(descriptive_df, writer, "Descriptive")
+    safe_to_excel(quality_df, writer, "Data Quality")
+    safe_to_excel(frequency_df, writer, "Frequencies")
+    safe_to_excel(analysis_df, writer, "Selected Data")
 
     if not satisfaction_df.empty:
-        satisfaction_df.to_excel(writer, sheet_name="Satisfaction", index=False)
+        safe_to_excel(satisfaction_df, writer, "Satisfaction")
 
 output.seek(0)
 

@@ -922,6 +922,30 @@ def prepare_excel_report(
     return output
 
 
+def show_report_preview(sheets: dict, expanded: bool = True):
+    """عرض أوراق التقرير داخل المنصة قبل تنزيل ملف Excel."""
+    available = [
+        (name, frame)
+        for name, frame in sheets.items()
+        if frame is not None and isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
+
+    if not available:
+        return
+
+    with st.expander("معاينة التقرير قبل التنزيل", expanded=expanded):
+        st.caption(
+            "هذه المعاينة تمثل محتوى أوراق ملف Excel. "
+            "قد يقتصر عرض البيانات الكبيرة على أول 100 سجل للحفاظ على سرعة المنصة."
+        )
+        tabs = st.tabs([name for name, _ in available])
+        for tab, (_, frame) in zip(tabs, available):
+            with tab:
+                st.dataframe(frame.head(100), use_container_width=True)
+                if len(frame) > 100:
+                    st.info(f"تظهر أول 100 سجلات من أصل {len(frame):,} سجلًا.")
+
+
 # ============================================================
 # واجهة رفع الملف
 # ============================================================
@@ -1064,6 +1088,11 @@ if dataset_type == "text":
 
     output = prepare_excel_report(summary_df, source_df=raw_df)
 
+    show_report_preview({
+        "الملخص": summary_df,
+        "المحتوى المستخرج": raw_df,
+    })
+
     st.download_button(
         "تنزيل النص/البيانات المستخرجة كـ Excel",
         data=output,
@@ -1123,6 +1152,12 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
             aggregate_summary.to_excel(writer, sheet_name="Numeric Summary", index=False)
 
     output.seek(0)
+
+    show_report_preview({
+        "الملخص": summary_df,
+        "البيانات المستخرجة": converted_df,
+        "الملخص الرقمي": aggregate_summary,
+    })
 
     st.download_button(
         "تنزيل النتائج المستخرجة",
@@ -1402,6 +1437,15 @@ with pd.ExcelWriter(output, engine="openpyxl") as writer:
 output.seek(0)
 
 st.progress(100, text="المرحلة 4 من 4 — اكتمل التحليل وأصبح التقرير جاهزًا")
+
+show_report_preview({
+    "الملخص": summary_df,
+    "التحليل الوصفي": descriptive_df,
+    "جودة البيانات": quality_df,
+    "مؤشر الرضا": satisfaction_df,
+    "التكرارات": frequency_df,
+    "البيانات المختارة": analysis_df,
+})
 
 st.download_button(
     "تنزيل تقرير Excel الكامل",

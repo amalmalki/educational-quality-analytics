@@ -993,6 +993,7 @@ uploaded_file = st.file_uploader(
 )
 
 if not uploaded_file:
+    st.session_state.pop("analysis_started_for", None)
     st.markdown(
         '<div class="privacy-note">🔒 تنبيه: تجنب رفع الأسماء والأرقام الجامعية وأي بيانات شخصية غير لازمة للتحليل.</div>',
         unsafe_allow_html=True,
@@ -1000,15 +1001,42 @@ if not uploaded_file:
     st.info("بانتظار ملف البيانات للبدء في التحليل.", icon="📂")
     st.stop()
 
+file_key = f"{uploaded_file.name}:{uploaded_file.size}"
+
+st.success(
+    f"تم استلام الملف **{uploaded_file.name}** وحجمه {uploaded_file.size / 1024:.1f} كيلوبايت. "
+    "اضغط الزر لبدء القراءة.",
+    icon="📥",
+)
+
+if st.button(
+    "ابدأ قراءة وتحليل الملف",
+    type="primary",
+    use_container_width=True,
+    icon="▶️",
+):
+    st.session_state["analysis_started_for"] = file_key
+
+if st.session_state.get("analysis_started_for") != file_key:
+    st.info(
+        "لم تبدأ المعالجة بعد. يمكنك التأكد من اسم الملف ثم الضغط على زر البدء.",
+        icon="ℹ️",
+    )
+    st.stop()
+
 
 # ============================================================
 # قراءة الملف
 # ============================================================
 try:
-    (loaded_result, extension) = load_file(uploaded_file)
-    candidates, reader_note = loaded_result
+    with st.spinner("جارٍ التحقق من صيغة الملف وقراءة محتواه..."):
+        (loaded_result, extension) = load_file(uploaded_file)
+        candidates, reader_note = loaded_result
 except Exception as exc:
-    st.error(f"تعذر قراءة الملف: {exc}")
+    st.error(
+        f"تعذر قراءة الملف: {exc}  \n"
+        "تحقق من أن الملف غير تالف وأن امتداده يطابق محتواه، ثم أعد المحاولة."
+    )
     st.stop()
 
 if not candidates:
@@ -1016,6 +1044,7 @@ if not candidates:
     st.stop()
 
 st.success(f"تمت قراءة الملف بنجاح: {uploaded_file.name}", icon="✅")
+st.toast("اكتملت قراءة الملف واستخراج البيانات.", icon="✅")
 st.progress(25, text="المرحلة 1 من 4 — تمت قراءة الملف واستخراج البيانات")
 
 if reader_note:
@@ -1032,6 +1061,12 @@ else:
     selected_candidate = candidate_names[0]
 
 raw_df = tidy_dataframe(candidates[selected_candidate])
+
+st.info(
+    f"عثرت المنصة على **{len(raw_df):,} استجابة/سجل** و"
+    f"**{len(raw_df.columns):,} أعمدة** في الجزء المحدد.",
+    icon="🔎",
+)
 
 if raw_df.empty:
     st.error("الجزء المحدد لا يحتوي على بيانات.")
@@ -1198,6 +1233,13 @@ if dataset_type in {"aggregated", "frequency_distribution"}:
 # ============================================================
 converted_df, auto_question_columns, auto_identifier_columns = detect_question_columns(raw_df)
 
+if auto_identifier_columns:
+    st.info(
+        "استبعدت المنصة مبدئيًا الأعمدة التالية من أسئلة التحليل لأنها تبدو كمعرّفات: "
+        + "، ".join(auto_identifier_columns),
+        icon="🛡️",
+    )
+
 numeric_columns = converted_df.select_dtypes(include=np.number).columns.tolist()
 
 if not numeric_columns:
@@ -1210,8 +1252,9 @@ if not numeric_columns:
 st.subheader("تحديد أسئلة الاستبانة")
 
 if auto_question_columns:
-    st.caption(
-        f"اكتشفت المنصة مبدئيًا {len(auto_question_columns)} عمودًا يبدو كأسئلة استبانة."
+    st.success(
+        f"اكتشفت المنصة مبدئيًا **{len(auto_question_columns)} أعمدة** تبدو كأسئلة استبانة.",
+        icon="✅",
     )
 else:
     st.warning(
@@ -1273,6 +1316,12 @@ with st.expander("خيارات مقياس الاستجابة", expanded=True):
     )
 
     sc3.metric("ثقة اكتشاف المقياس", f"{scale_confidence * 100:.0f}%")
+
+st.info(
+    f"المقياس المستخدم حاليًا من **{expected_min:g}** إلى **{expected_max:g}**. "
+    "صححه يدويًا إذا كان مقياس الاستبانة الأصلي مختلفًا.",
+    icon="📏",
+)
 
 if expected_min >= expected_max:
     st.error("يجب أن تكون أعلى قيمة أكبر من أقل قيمة.")
@@ -1461,6 +1510,42 @@ with visual_tab2:
         st.caption("يجمع الرسم جميع إجابات البنود المختارة لإظهار شكل التوزيع العام.")
     else:
         st.info("لا تتوفر إجابات كافية لرسم التوزيع.")
+
+# ============================================================
+# الاستجابة التفسيرية للمنصة
+# ============================================================
+st.subheader("قراءة المنصة للنتائج")
+
+if overall_satisfaction >= 85:
+    satisfaction_label = "مرتفع جدًا"
+elif overall_satisfaction >= 70:
+    satisfaction_label = "جيد"
+elif overall_satisfaction >= 50:
+    satisfaction_label = "متوسط"
+else:
+    satisfaction_label = "منخفض"
+
+response_messages = [
+    f"بلغ مؤشر الرضا العام **{overall_satisfaction:.1f}%**، ويقع ضمن مستوى **{satisfaction_label}** وفق التصنيف الوصفي للمنصة.",
+    f"بلغ اكتمال البيانات **{completeness_pct:.1f}%**؛ والقيم المفقودة تمثل **{100 - completeness_pct:.1f}%** من الخلايا المختارة.",
+]
+
+if alpha_value is not None:
+    response_messages.append(
+        f"بلغ معامل كرونباخ ألفا **{alpha_value:.3f}** وتصنيفه **{alpha_status}**. "
+        "هذا مؤشر للاتساق الداخلي، وليس دليلًا مستقلًا على صدق الأداة."
+    )
+else:
+    response_messages.append("لم يتوفر معامل ثبات داخلي قابل للحساب من الاختيارات الحالية.")
+
+if out_of_range:
+    response_messages.append(
+        f"رصدت المنصة قيمًا خارج نطاق المقياس في **{len(out_of_range)} أعمدة**؛ "
+        "ينبغي مراجعتها قبل اعتماد التقرير."
+    )
+
+for message in response_messages:
+    st.markdown(f"- {message}")
 
 if not satisfaction_df.empty:
     best_item = satisfaction_df.loc[satisfaction_df["مؤشر الرضا %"].idxmax()]

@@ -2054,15 +2054,39 @@ with st.container(border=True):
                 satisfaction_df
                 .nlargest(20, "مؤشر الرضا %")
                 .sort_values("مؤشر الرضا %", ascending=True)
-                .set_index("السؤال")[["مؤشر الرضا %"]]
+                .reset_index(drop=True)
             )
+            visual_satisfaction.insert(
+                0,
+                "رمز البند",
+                [f"س{index:02d}" for index in range(1, len(visual_satisfaction) + 1)],
+            )
+            visual_chart_df = visual_satisfaction.set_index("رمز البند")[["مؤشر الرضا %"]]
             chart_height = max(360, min(760, 42 * len(visual_satisfaction)))
-            st.caption("مؤشر الرضا لكل بند — تعرض اللوحة 20 بندًا كحد أقصى لتبقى العناوين مقروءة.")
+            st.caption(
+                "استخدمت رموزًا مختصرة داخل الرسم حتى لا تتداخل عناوين الأسئلة الطويلة مع الأعمدة. "
+                "تظهر مطابقة كل رمز مع اسم السؤال كاملًا أسفل الرسم."
+            )
             st.bar_chart(
-                visual_satisfaction,
+                visual_chart_df,
                 color="#72b493",
                 horizontal=True,
                 height=chart_height,
+            )
+            st.dataframe(
+                visual_satisfaction[["رمز البند", "السؤال", "مؤشر الرضا %"]]
+                .sort_values("مؤشر الرضا %", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "رمز البند": st.column_config.TextColumn("الرمز", width="small"),
+                    "السؤال": st.column_config.TextColumn("اسم السؤال الكامل", width="large"),
+                    "مؤشر الرضا %": st.column_config.NumberColumn(
+                        "مؤشر الرضا",
+                        format="%.1f%%",
+                        width="medium",
+                    ),
+                },
             )
         else:
             st.info("لا تتوفر بيانات كافية لرسم مؤشرات البنود.")

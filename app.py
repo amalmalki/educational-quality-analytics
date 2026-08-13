@@ -946,6 +946,29 @@ def show_report_preview(sheets: dict, expanded: bool = True):
                     st.info(f"تظهر أول 100 سجلات من أصل {len(frame):,} سجلًا.")
 
 
+def donut_metric(label: str, value: float, color: str = "#136f63", note: str = ""):
+    """بطاقة مؤشر دائري خفيفة لا تحتاج مكتبات رسوم إضافية."""
+    safe_value = 0.0 if pd.isna(value) else float(np.clip(value, 0, 100))
+    st.markdown(
+        f"""
+        <div style="background:#fff;border:1px solid #dce9e6;border-radius:18px;
+                    padding:18px 12px;text-align:center;box-shadow:0 5px 18px rgba(22,48,45,.05)">
+          <div style="width:132px;height:132px;margin:0 auto 12px;border-radius:50%;
+                      background:conic-gradient({color} 0 {safe_value:.2f}%,#e8f0ee {safe_value:.2f}% 100%);
+                      display:grid;place-items:center">
+            <div style="width:94px;height:94px;border-radius:50%;background:white;
+                        display:grid;place-items:center;color:#0b4f47;font-size:1.35rem;font-weight:800">
+              {safe_value:.1f}%
+            </div>
+          </div>
+          <div style="font-weight:800;color:#16302d">{label}</div>
+          <div style="font-size:.78rem;color:#627773;margin-top:4px">{note}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ============================================================
 # واجهة رفع الملف
 # ============================================================
@@ -1310,7 +1333,7 @@ if scale_span > 0:
         .head(20)
     )
     st.caption("مقارنة مؤشر الرضا بين البنود — أعلى 20 بندًا")
-    st.bar_chart(chart_df, color="#136f63", horizontal=True)
+    st.bar_chart(chart_df, color="#136f63", horizontal=False)
 else:
     satisfaction_df = pd.DataFrame()
 
@@ -1386,6 +1409,58 @@ m1.metric("عدد السجلات", f"{len(analysis_df):,}")
 m2.metric("عدد الأسئلة", len(selected_columns))
 m3.metric("المتوسط العام", f"{overall_mean:.3f}")
 m4.metric("الرضا العام", f"{overall_satisfaction:.1f}%")
+
+# ============================================================
+# لوحة الإحصاءات المرئية
+# ============================================================
+st.subheader("لوحة الإحصاءات المرئية")
+
+total_cells = analysis_df.shape[0] * analysis_df.shape[1]
+available_cells = int(analysis_df.notna().sum().sum())
+completeness_pct = (available_cells / total_cells * 100) if total_cells else 0
+alpha_pct = float(np.clip(alpha_value * 100, 0, 100)) if alpha_value is not None else 0
+
+circle1, circle2, circle3 = st.columns(3)
+with circle1:
+    donut_metric("الرضا العام", overall_satisfaction, "#136f63", "محسوب وفق نطاق المقياس")
+with circle2:
+    donut_metric("اكتمال البيانات", completeness_pct, "#d9a441", "نسبة القيم غير المفقودة")
+with circle3:
+    donut_metric(
+        "الثبات الداخلي",
+        alpha_pct,
+        "#2878a5",
+        alpha_status if alpha_status else "غير متاح",
+    )
+
+visual_tab1, visual_tab2 = st.tabs(["أعمدة مؤشرات البنود", "أعمدة توزيع الإجابات"])
+
+with visual_tab1:
+    if not satisfaction_df.empty:
+        visual_satisfaction = (
+            satisfaction_df
+            .sort_values("مؤشر الرضا %", ascending=False)
+            .head(20)
+            .set_index("السؤال")[["مؤشر الرضا %"]]
+        )
+        st.bar_chart(visual_satisfaction, color="#136f63")
+    else:
+        st.info("لا تتوفر بيانات كافية لرسم مؤشرات البنود.")
+
+with visual_tab2:
+    combined_answers = (
+        pd.concat([analysis_df[c] for c in selected_columns], ignore_index=True)
+        .dropna()
+        .value_counts()
+        .sort_index()
+        .rename_axis("قيمة الإجابة")
+        .to_frame("التكرار")
+    )
+    if not combined_answers.empty:
+        st.bar_chart(combined_answers, color="#d9a441")
+        st.caption("يجمع الرسم جميع إجابات البنود المختارة لإظهار شكل التوزيع العام.")
+    else:
+        st.info("لا تتوفر إجابات كافية لرسم التوزيع.")
 
 if not satisfaction_df.empty:
     best_item = satisfaction_df.loc[satisfaction_df["مؤشر الرضا %"].idxmax()]
